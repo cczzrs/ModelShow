@@ -1,0 +1,46 @@
+{
+  "name": "对当前 JK 节点组的描述",
+  "md5": "e46627f52ca9a3974fddc75020b20ef0",
+  "format": "jk-logic-structure-V3.1.0",
+  "format_md5": "b1b11868c091bfa5e571935200467312",
+  "created_at": "2026-08-22T04:1787372535000000000",
+  "input_bits": 4,
+  "jk_bits_max": 16,
+  "jk_bits": 6,
+  "output_bits": 4,
+  "ex_source_max": 3,
+  "ex_operation_max": 5,
+  "ex_source_sum": 12,
+  "ex_operation_sum": 23,
+  "nodes": [
+    {"id": "Q0", "ex": "J0K1J(X0)K1"},
+    {"id": "Q1", "ex": "J0K1J(X1)K1"},
+    {"id": "Q2", "ex": "J0K1J(Q0)J(Q1)K1"},
+    {"id": "Q3", "ex": "J(X0)J(X2)K(Q0)"},
+    {"id": "Q4", "ex": "J0K1J(Q2)K(X1)"},
+    {"id": "Q5", "ex": "J(X3)J(Q1)K(Q3)"}
+  ],
+  "initial_q": {
+    "0": [],
+    "1": ["Q3", "Q5"]
+  },
+  "q_y": [
+    {"Y0": "Q2"},
+    {"Y1": "Q3"},
+    {"Y2": "Q4"},
+    {"Y3": "Q5"}
+  ],
+  "inputs": [
+    {"X0": "X0"},
+    {"X1": "X1"},
+    {"X2": "X2"},
+    {"X3": "X3"}
+  ],
+  "outputs": [
+    {"Y0": "Y0"},
+    {"Y1": "Y1"},
+    {"Y2": "Y2"},
+    {"Y3": "Y3"}
+  ]
+}
+
