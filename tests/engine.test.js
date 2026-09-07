@@ -88,3 +88,14 @@ test('reset clears queued snapshots, history, outputs, counts and animation',()=
 test('queue protection pauses without losing existing items; histories are bounded',()=>{
  const e=make([['Q0','J0K(X0)']]);e.queueLimit=2;e.historyLimit=2;const p=new Playback(e);p.send({X0:0});p.send({X0:1});p.tick(.1);assert.equal(p.running,false);assert.equal(e.length,2);assert.throws(()=>p.send({X0:0}));assert.equal(p.step().value,0);assert.equal(p.step().value,1);assert.equal(e.history.length,2);
 });
+
+test('user v2.6.2 import retains 16 nodes, executes all nodes and publishes eight outputs',()=>{
+ const raw=JSON.parse(readFileSync(new URL('./jk-logic-structure-v262.json',import.meta.url),'utf8'));
+ const e=new JKEngine(compileModel(raw));
+ assert.equal(e.model.valid.length,16);assert.equal(e.model.inputs.length,8);assert.equal(e.model.outputs.length,8);
+ assert.deepEqual(e.model.issues,[]);
+ e.send(Object.fromEntries(e.model.inputs.map(id=>[id,0])));
+ const trace=drain(e);
+ assert.deepEqual(trace.map(x=>x.node),Array.from({length:16},(_,i)=>`Q${i}`));
+ assert.deepEqual(Object.fromEntries(e.outputs),{Y0:1,Y1:0,Y2:0,Y3:1,Y4:0,Y5:0,Y6:0,Y7:0});
+});

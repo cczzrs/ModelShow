@@ -1,0 +1,67 @@
+{
+    "format": "jk-logic-structure-v2.6.2",
+    "md5": "ef4fa283fe294766dd98227a676d4c2f",
+    "format_md5": "efe1ff726b91a687a616adccd5777674",
+    "name": "2.62-initial-model",
+    "created_at": "2026-08-22T04:1787372536000000000",
+    "input_bits": 8,
+    "jk_bits_max": 16,
+    "jk_bits": 16,
+    "output_bits": 8,
+    "ex_source_max": 2,
+    "ex_operation_max": 4,
+    "ex_source_sum": 23,
+    "ex_operation_sum": 55,
+    "nodes": [
+    {"id":"Q0","ex":"J0K1K(X0)"},
+    {"id":"Q1","ex":"J0K1J(X4)K(Q0)"},
+    {"id":"Q2","ex":"J0K1K(X6)J(Q1)"},
+    {"id":"Q3","ex":"J0K1K(X7)K(Q2)"},
+    {"id":"Q4","ex":"J0K1J(Q3)"},
+    {"id":"Q5","ex":"J0K1K(Q4)K(X3)"},
+    {"id":"Q6","ex":"J0K1J(Q5)"},
+    {"id":"Q7","ex":"J0K1K(Q6)"},
+    {"id":"Q8","ex":"J0K1K(Q7)"},
+    {"id":"Q9","ex":"J0K1J(Q8)J(X5)"},
+    {"id":"Q10","ex":"J0K1K(X1)J(Q9)"},
+    {"id":"Q11","ex":"J0K1K(Q10)"},
+    {"id":"Q12","ex":"J0K1K(Q11)"},
+    {"id":"Q13","ex":"J0K1J(Q12)"},
+    {"id":"Q14","ex":"J0K1J(Q13)J(X2)"},
+    {"id":"Q15","ex":"J0K1J(Q14)"}
+    ],
+    "initial_q": {
+    "0": [],
+    "1": []
+    },
+    "q_y": [
+    {"Y0":"Q1"},
+    {"Y1":"Q3"},
+    {"Y2":"Q10"},
+    {"Y3":"Q5"},
+    {"Y4":"Q12"},
+    {"Y5":"Q13"},
+    {"Y6":"Q14"},
+    {"Y7":"Q15"}
+    ],
+    "inputs": [
+    {"X0":"X0"},
+    {"X1":"X1"},
+    {"X2":"X2"},
+    {"X3":"X3"},
+    {"X4":"X4"},
+    {"X5":"X5"},
+    {"X6":"X6"},
+    {"X7":"X7"}
+    ],
+    "outputs": [
+    {"Y0":"Y0"},
+    {"Y1":"Y1"},
+    {"Y2":"Y2"},
+    {"Y3":"Y3"},
+    {"Y4":"Y4"},
+    {"Y5":"Y5"},
+    {"Y6":"Y6"},
+    {"Y7":"Y7"}
+    ]
+}
