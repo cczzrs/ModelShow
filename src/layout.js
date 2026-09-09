@@ -1,18 +1,23 @@
 /** Deterministic layouts in world units. This module never reads or mutates runtime q. */
 import { order } from './engine.js';
 export const LAYOUT_MODES = ['auto', '1D', '2D', '3D', '4D', '5D'];
+export const DEFAULT_LAYOUT_MODE = '4D';
 const EPS = 1e-9;
 const radius2 = p => p.x*p.x + p.y*p.y + p.z*p.z;
 const distance = (a,b) => Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
 const nodeOrder = (a,b) => /^Q\d+$/.test(a.id) && /^Q\d+$/.test(b.id) ? order(a.id,b.id) || a.key.localeCompare(b.key) : a.key.localeCompare(b.key);
 const centerOrder = (a,b) => radius2(a)-radius2(b) || a.x-b.x || a.y-b.y || a.z-b.z;
 const parameterCount = n => n.tokens.filter(t=>t.source).length;
+const negate = value => value===0?0:-value;
+const toWorldPoint = p => ({x:p.x,y:negate(p.z),z:p.y});
+const toConstructionPoint = p => ({x:p.x,y:p.z,z:negate(p.y)});
+const transformMap = (positions,transform) => new Map([...positions].map(([key,p])=>[key,transform(p)]));
 const centered = points => {
   if(!points.length)return points;
   const b=bounds(points);
   return points.map(p=>({x:p.x-(b.min.x+b.max.x)/2,y:p.y-(b.min.y+b.max.y)/2,z:p.z-(b.min.z+b.max.z)/2}));
 };
-/** 1D is vertical; planar and cubic slots share a unit lattice. */
+/** Construction coordinates; 1D stays vertical, other modes rotate Y/Z on return. */
 export function gridPoints(count, dimensions) {
   if(!count)return [];
   if(dimensions===1)return Array.from({length:count},(_,i)=>({x:0,y:(count-1)/2-i,z:0}));
@@ -67,7 +72,7 @@ function basic(model,nodes,mode) {
   const candidates=gridPoints(nodes.length,Number(mode[0]));
   const positions=new Map(nodes.map((n,i)=>[n.key,candidates[i]]));
   terminals(model,positions,mode);
-  return {positions,candidates,mode,description:{'1D':'三列竖排 · Y 轴从上到下','2D':'YZ 平面 · 三区中心沿 X 轴','3D':'YZ 输入输出 · JK 近似正方体'}[mode]};
+  return {positions,candidates,mode,description:{'1D':'三列竖排 · Y 轴从上到下','2D':'YZ 平面 · 先沿 Z 再沿 Y 向下 · 三区中心沿 X 轴','3D':'YZ 输入输出 · JK 近似正方体'}[mode]};
 }
 /** Within fixed x slices, reduce actual wire length without reversing topology order. */
 function optimizeSlices(positions,nodes,edges){
@@ -166,9 +171,10 @@ function topologyOrder(nodes,edges) {
 }
 const project=(p,flat)=>flat?{x:p.x,y:p.y}:{x:.545*p.x-.839*p.z,y:-.237*p.x+.959*p.y-.154*p.z};
 function crosses(a,b,c,d){const turn=(p,q,r)=>(q.x-p.x)*(r.y-p.y)-(q.y-p.y)*(r.x-p.x);return turn(a,b,c)*turn(a,b,d)<-EPS&&turn(c,d,a)*turn(c,d,b)<-EPS;}
-/** Readability heuristic, not a proof of a globally optimal drawing. */
+/** Score in construction coordinates so an axis swap alone preserves automatic selection. */
 export function readability(result,edges) {
-  const flat=result.mode==='1D',screen=new Map([...result.positions].map(([k,p])=>[k,project(p,flat)]));
+  const positions=result.axisOrder==='x,-z,y'?transformMap(result.positions,toConstructionPoint):result.positions;
+  const flat=result.mode==='1D',screen=new Map([...positions].map(([k,p])=>[k,project(p,flat)]));
   const bins=new Map();let overlaps=0;
   for(const p of screen.values()){
     const x=Math.floor(p.x/.7),y=Math.floor(p.y/.7);
@@ -190,12 +196,12 @@ export function readability(result,edges) {
     }
     for(let j=0;j<i;j++){const b=sampled[j];if([a.source,a.target].some(k=>k===b.source||k===b.target))continue;const r=screen.get(b.source),s=screen.get(b.target);if(r&&s&&crosses(p,q,r,s))crossing++;}
   }
-  const b=bounds([...result.positions.values()]),width=b.max.x-b.min.x+1,height=b.max.y-b.min.y+1;
+  const b=bounds([...positions.values()]),width=b.max.x-b.min.x+1,height=b.max.y-b.min.y+1;
   const aspectPenalty=Math.max(width/height,height/width);
   const length=wireLength(result.positions,edges);
   return {score:overlaps*100+obstructed*10+crossing*3+backward*2+length/Math.max(1,edges.length)+aspectPenalty*.5,overlaps,obstructed,crossing,backward,wireLength:length};
 }
-export function createLayout(model,mode='auto') {
+export function createLayout(model,mode=DEFAULT_LAYOUT_MODE) {
   if(!LAYOUT_MODES.includes(mode))throw new Error(`未知布局：${mode}`);
   const nodes=[...model.nodes].sort(nodeOrder),edges=layoutEdges(model);
   let result;
@@ -209,6 +215,14 @@ export function createLayout(model,mode='auto') {
     result=choices[0];result.automatic=true;
   }
   result.metrics??=readability(result,edges);
+  // Only 1D keeps its original top-to-bottom Y columns, including automatic 1D.
+  if(result.mode==='1D')result.axisOrder='xyz';
+  else {
+    result.positions=transformMap(result.positions,toWorldPoint);
+    result.candidates=result.candidates.map(toWorldPoint);
+    if(result.seedPositions)result.seedPositions=transformMap(result.seedPositions,toWorldPoint);
+    result.axisOrder='x,-z,y';
+  }
   result.bounds=bounds([...result.positions.values()]);result.requestedMode=mode;
   return result;
 }

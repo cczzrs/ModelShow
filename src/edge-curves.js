@@ -1,10 +1,10 @@
 import * as THREE from 'three/webgpu';
 const hash=text=>{let h=2166136261;for(const c of text)h=Math.imul(h^c.charCodeAt(0),16777619);return h>>>0;};
 // Independent random waypoints, interpolated smoothly instead of frame-by-frame jitter.
+function driftValue(i,seed){let h=Math.imul(i^seed,0x45d9f3b);h=Math.imul(h^(h>>>16),0x45d9f3b);return ((h^(h>>>16))>>>0)/4294967295*2-1;}
 function drift(time,seed){
  const n=Math.floor(time),f=time-n,s=f*f*f*(f*(f*6-15)+10);
- const value=i=>{let h=Math.imul(i^seed,0x45d9f3b);h=Math.imul(h^(h>>>16),0x45d9f3b);return ((h^(h>>>16))>>>0)/4294967295*2-1;};
- return value(n)*(1-s)+value(n+1)*s;
+ return driftValue(n,seed)*(1-s)+driftValue(n+1,seed)*s;
 }
 /** Share lane allocation across BOTH directions so reciprocal edges do not coincide. */
 export function assignEdgeLanes(edges){
@@ -16,7 +16,7 @@ export function assignEdgeLanes(edges){
 /** Endpoint-fixed bows with slow, wind-like sway; nodes never move. */
 export class FloatingEdgeCurve extends THREE.Curve {
  constructor(start,end,sourceKey,targetKey,laneIndex=0,laneCount=1){
-  super();this.start=start.clone();this.end=end.clone();this.time=0;
+  super();this.start=start.clone();this.end=end.clone();this.time=0;this.driftTime=NaN;this.driftSeed=NaN;
   const id=JSON.stringify([sourceKey,targetKey].sort()),h=hash(id);
   // One main wind transition takes 15–25 seconds, independent of playback speed.
   this.seed=(Math.random()*4294967296)>>>0;this.speed=1/(15+Math.random()*10);this.loop=sourceKey===targetKey;
@@ -34,7 +34,12 @@ export class FloatingEdgeCurve extends THREE.Curve {
   if(t<=0)return target.copy(this.start);if(t>=1)return target.copy(this.end);
   const time=this.time*this.speed,envelope=Math.sin(Math.PI*t);
   // Keep lane-normal motion narrow; the larger sway is perpendicular to lane spacing.
-  const float=drift(time,this.seed)*.025,side=drift(time,this.seed^0x9e3779b9)*.025;
+  // These two terms do not depend on t: all samples and arrow searches share them.
+  if(this.driftTime!==time||this.driftSeed!==this.seed){
+   this.driftTime=time;this.driftSeed=this.seed;
+   this.float=drift(time,this.seed)*.025;this.side=drift(time,this.seed^0x9e3779b9)*.025;
+  }
+  const float=this.float,side=this.side;
   const breeze=this.sway*(.8*drift(time+.7*t,this.seed^0x85ebca6b)+.2*drift(time*1.7-1.1*t,this.seed^0xc2b2ae35));
   if(this.loop){const angle=2*Math.PI*t;return target.copy(this.start).addScaledVector(this.u,Math.sin(angle)*(this.radius+float)+envelope*breeze).addScaledVector(this.v,(1-Math.cos(angle))*(this.radius+side));}
   return target.copy(this.start).lerp(this.end,t).addScaledVector(this.u,envelope*(this.bow+float)).addScaledVector(this.v,envelope*(this.wave+breeze));

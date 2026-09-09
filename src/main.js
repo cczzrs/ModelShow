@@ -1,16 +1,36 @@
 import './style.css';
 import { compileModel, JKEngine } from './engine.js';
 import { Playback } from './playback.js';
+import { FrameUpdates } from './frame-updates.js';
+import { loadDisplay, exportDisplayModel } from './output-display.js';
+import { OutputDisplayUI, lampDetails } from './output-display-ui.js';
 import { NetworkView } from './view.js';
+import { ImageInputUI } from './image-input-ui.js';
 const $ = id => document.getElementById(id);
 const el = (tag, text, className) => { const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e; };
-let model,engine,playback,selected,view,importGeneration=0;
+let model,engine,playback,selected,view,importGeneration=0,modelVersion=0;
+const frameUpdates=new FrameUpdates(update,event=>view?.syncOutputs(engine,event));
 const outputElements=new Map(),pickerElements=new Map();
+const displayUI=new OutputDisplayUI(config=>{view?.setOutputDisplay(config);renderInspector();},()=>{
+  if(!model)return;
+  const text=JSON.stringify(exportDisplayModel(model.raw,displayUI.config),null,2);
+  const blob=new Blob([text],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');
+  link.href=url;link.download='jk-model-with-display.json';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);return text;
+});
+const imageUI=new ImageInputUI((json,version)=>{
+  if(version!==modelVersion)throw new Error('模型已更换，请重新提取像素数据。');
+  $('input-json').value=json;
+  message('已填入图片像素数据，点击“发送信号”执行。');
+},()=>$('input-json').focus());
 function message(text,error=false){$('message').textContent=text;$('message').classList.toggle('error',error);}
 function select(key,toggle=true){selected=toggle&&selected===key?null:key;view?.select(selected);for(const [k,b]of pickerElements)b.classList.toggle('active',k===selected);renderInspector();}
 function renderInspector(){
   if(!model)return;
   const box=$('inspector');box.replaceChildren();
+  if(selected?.startsWith('lamp:')){
+    const index=Number(selected.slice(5)),pixel=view?.outputState.config.pixels[index];$('selected-id').textContent=`灯 ${index+1}`;
+    if(pixel){box.append(el('pre',lampDetails(pixel,view.outputState.results[index]),'lamp-readout'));const edit=el('button','编辑此灯','button');edit.onclick=()=>displayUI.open(index);box.append(edit);}else box.append(el('p','该灯已移除。','muted'));return;
+  }
   const n=model.nodes.find(n=>n.key===selected);
   $('selected-id').textContent=n?.id??selected??'—';
   if(!n){
@@ -44,6 +64,7 @@ function update(){
   if(!engine)return;
   for(const o of model.outputs){const cell=outputElements.get(o.id),v=engine.outputs.get(o.id);cell.textContent=o.error?'异常':v===null?'未输出':String(v);cell.classList.toggle('empty',v===null);}
   $('total').textContent=engine.total.toLocaleString();$('play').textContent=playback.running?'Ⅱ 暂停':'▶ 继续';
+  $('total2').textContent=engine.total.toLocaleString();
   $('step').disabled=false;
   const status=engine.capacityReached?'队列保护 · 已暂停':!playback.running?'已暂停':engine.length||playback.active||playback.visuals.length?'运行中':model.valid.some(n=>engine.waiting(n).length)?'等待输入':'就绪';
   $('run-status').textContent=status;
@@ -55,13 +76,15 @@ function update(){
     if(event.type==='input')row.append(el('span','↗ '+(event.accepted.join(' · ')||'无匹配输入')),el('b','发送'));
     else row.append(el('span',`#${event.ticket}  ${event.node}`),el('b',`${event.before===null?'·':event.before} → ${event.value}`));fragment.append(row);
   }
-  $('history').replaceChildren(fragment);renderQueue();renderInspector();view?.refresh(engine);
+  $('history').replaceChildren(fragment);renderQueue();view?.refresh(engine);displayUI.update(engine.outputs);renderInspector();
 }
 function install(raw){
   const next=compileModel(raw); // Validate before replacing the current model.
   model=next;engine=new JKEngine(model);selected=model.valid[0]?.key??model.nodes[0]?.key??model.inputs[0];
-  playback=new Playback(engine,{onChange:update,onVisual:event=>event?view?.showTransfers(event.transfers):view?.clearSignals(),onProgress:t=>view?.progress(t)});
+  imageUI.setModel(model.inputs,++modelVersion);
+  playback=new Playback(engine,{onChange:event=>frameUpdates.request(event),onVisual:event=>event?view?.showTransfers(event.transfers):view?.clearSignals(),onProgress:t=>view?.progress(t)});
   playback.speed=Number($('speed').value);playback.skip=$('skip').checked;
+  updateSpeedControl();
   $('model-name').textContent=String(raw.name??'未命名模型');$('model-md5').textContent=`MD5: ${raw.md5??'未提供'}`;$('stat-nodes').textContent=model.nodes.length;$('stat-state').textContent=model.nodes.filter(n=>n.initial!==null).length;
   $('stat-edges').textContent=model.nodes.reduce((sum,n)=>sum+n.tokens.filter(t=>t.source).length,0)+model.outputs.length;
   const issues=[...model.issues,...model.nodes.flatMap(n=>n.errors.map(e=>`${n.id}：${e}`)),...model.outputs.filter(o=>o.error).map(o=>`${o.id}：${o.error}`)];
@@ -75,15 +98,26 @@ function install(raw){
   const defaults=Object.fromEntries(model.inputs.map(id=>[id,0]));
   if(model.inputs.join(',')==='X0,X1,X2,X3')Object.assign(defaults,{X0:1,X2:1});
   $('input-json').value=JSON.stringify(defaults);$('queue').scrollTop=0;
-  view?.setModel(model);select(selected,false);update();document.querySelector('.left-panel').scrollTop=0;message('已加载模型。发送信号或暂停后单步执行。');
+  const display=loadDisplay(raw.outputDisplay);
+  view?.setModel(model);view?.syncOutputs(engine);view?.setOutputDisplay(display.config);displayUI.load(display.config,model.outputs,display.error);select(selected,false);frameUpdates.request();document.querySelector('.left-panel').scrollTop=0;message(display.error??'已加载模型。发送信号或暂停后单步执行。',!!display.error);
 }
-$('queue').addEventListener('scroll',renderQueue);new ResizeObserver(renderQueue).observe($('queue'));
+$('queue').addEventListener('scroll',()=>frameUpdates.invalidate());new ResizeObserver(()=>frameUpdates.invalidate()).observe($('queue'));
+$('image-input').onclick=()=>imageUI.open();
 $('send').onclick=()=>{try{const e=playback.send(JSON.parse($('input-json').value));message(`已发送 ${e.accepted.length} 个输入${e.ignored.length?`，忽略 ${e.ignored.length} 个未匹配字段`:''}${!playback.running?'；保持暂停':''}。`);}catch(e){message(e.message,true);}};
 $('play').onclick=()=>{try{playback.running?playback.pause():playback.resume();}catch(e){message(e.message,true);}};
 $('step').onclick=()=>{try{playback.step();}catch(e){playback.pause();message(e.message,true);}};
 $('reset').onclick=()=>{playback.reset();message('已重载初始状态，保持暂停。常量节点已重新入队。');};
-$('speed').oninput=()=>{if(playback)playback.speed=Number($('speed').value);$('speed-value').textContent=$('speed').value+'×';};
-$('skip').onchange=()=>{if(playback)playback.skip=$('skip').checked;};
+function updateSpeedControl(){
+  const skip=$('skip').checked,speed=Number($('speed').value),budget=playback?.skipFrameBudgetMs??4*speed;
+  $('speed-label').textContent=skip?'计算速度':'动画速度';
+  $('speed-value').textContent=speed+'×';
+  $('speed-budget').hidden=!skip;
+  $('speed-budget').textContent=`每帧预算 ${budget} ms`;
+  $('speed').setAttribute('aria-valuetext',skip?`${speed} 倍，每帧计算预算 ${budget} 毫秒`:`动画速度 ${speed} 倍`);
+  $('speed').title=skip?`每帧最多计算约 ${budget} 毫秒；高倍速可能降低画面流畅度，单项计算不会中断。`:'调节传播动画的播放速度';
+}
+$('speed').oninput=()=>{if(playback)playback.speed=Number($('speed').value);updateSpeedControl();};
+$('skip').onchange=()=>{if(playback)playback.skip=$('skip').checked;updateSpeedControl();frameUpdates.invalidate();};
 function layoutStatus(result) {
   for(const button of $('layout-buttons').querySelectorAll('[data-layout]')) button.setAttribute('aria-pressed',String(button.dataset.layout===result.requestedMode));
   $('layout-buttons').setAttribute('aria-busy',String(!!result.pending));
@@ -98,6 +132,7 @@ $('layout-buttons').onclick=event=>{
   const button=event.target.closest('[data-layout]');
   if(button&&view?.model)view.requestLayout(button.dataset.layout);
 };
+$('output-render').onclick=()=>displayUI.open();
 $('camera-reset').onclick=()=>view?.resetCamera();
 $('node-labels').onclick=()=>{const button=$('node-labels'),hidden=button.getAttribute('aria-pressed')!=='true';button.setAttribute('aria-pressed',String(hidden));button.textContent=hidden?'显示名称和次数':'隐藏名称和次数';view?.setNodeLabelsHidden(hidden);};
 $('black-background').onclick=()=>{const enabled=$('black-background').getAttribute('aria-pressed')!=='true';$('black-background').setAttribute('aria-pressed',String(enabled));view?.setBlackBackground(enabled);};
@@ -123,8 +158,15 @@ $('file').onchange=async()=>{
   } catch(e) { if(generation===importGeneration)importError(e); }
   finally { $('file').value=''; }
 };
+function pauseAfterError(error,prefix){
+  let detail='';
+  try { playback?.pause(); }
+  catch(syncError){detail=`；状态同步失败：${syncError.message}`;}
+  finally { frameUpdates.invalidate(); }
+  message(`${prefix}：${error.message}${detail}`,true);
+}
 function renderingFailed(error) {
-  playback?.pause();
+  pauseAfterError(error,'3D 渲染中断');
   $('backend').textContent='渲染已停止';
   $('gpu-message').hidden=false;
   $('gpu-detail').textContent=error.message;
@@ -143,15 +185,21 @@ $('gpu-retry').onclick=async()=>{
 async function start(){
   view=new NetworkView($('viewport'),select,renderingFailed,layoutStatus);
   const response=await fetch('./example.json');if(!response.ok)throw new Error('无法加载示例模型');install(await response.json());
-  try{await view.init();$('backend').textContent='WebGPU · 已连接';view.setModel(model);view.select(selected);}catch(e){$('backend').textContent='WebGPU 不可用';$('gpu-message').hidden=false;$('gpu-detail').textContent=e.message;}
+  frameUpdates.flush();
   let previous=performance.now(),lastStatus='';
   function frame(now){
-    const dt=Math.min((now-previous)/1000,.1);previous=now;
-    try{playback.tick(dt);const status=`${playback.running}:${!!playback.active}:${playback.visuals.length}:${engine.length}`;if(status!==lastStatus){lastStatus=status;update();}}
-    catch(e){playback.pause();message(`执行错误：${e.message}`,true);}
-    try { view.render(playback.running); } catch(e) { view.fail(e); }
-    requestAnimationFrame(frame);
+    try {
+      const dt=Math.min((now-previous)/1000,.1);previous=now;
+      try{playback.tick(dt);}
+      catch(e){pauseAfterError(e,'执行错误');}
+      const status=`${playback.running}:${!!playback.active}:${playback.visuals.length}:${engine.length}`;
+      if(status!==lastStatus){lastStatus=status;frameUpdates.invalidate();}
+      try { frameUpdates.flush(); }
+      catch(e){pauseAfterError(e,'界面更新错误');}
+      try { view.render(playback.running); } catch(e) { view.fail(e); }
+    } finally { requestAnimationFrame(frame); }
   }
   requestAnimationFrame(frame);
+  try{await view.init();$('backend').textContent='WebGPU · 已连接';view.setModel(model);view.refresh(engine);view.select(selected);}catch(e){$('backend').textContent='WebGPU 不可用';$('gpu-message').hidden=false;$('gpu-detail').textContent=e.message;}
 }
 start().catch(e=>message(`启动失败：${e.message}`,true));

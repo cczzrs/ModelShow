@@ -1,0 +1,57 @@
+import {CHANNELS,defaultDisplay,emptyPixel,validateDisplay,resizeDisplay,batchDisplay,convertPixel,parseBrightness,channelsOf,evaluatePixel} from './output-display.js';
+const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
+const button=(text,fn)=>{const b=el('button',text,'button small');b.type='button';b.onclick=fn;return b;};
+const input=(value,type='text')=>{const n=el('input');n.type=type;n.value=value;return n;};
+const select=(options,value)=>{const n=el('select');for(const [v,t] of options){const o=el('option',t);o.value=v;n.append(o);}n.value=value;return n;};
+const field=(parent,text,node)=>{const l=el('label',text);l.append(node);parent.append(l);return node;};
+const ORDERS=[['lsb-first','第一位是最低位'],['msb-first','第一位是最高位']];
+const MAPPINGS=[['scale','按位宽铺满亮度'],['direct','直接取值 0～255（超出截断）']];
+function parseBits(text){return text.trim()?text.trim().split(/[\s,，]+/):[];}
+export function lampDetails(pixel,result){return CHANNELS.map(k=>{const c=channelsOf(pixel)[k],r=result?.[k];return `${k.toUpperCase()} · ${c.kind==='fixed'?'固定值':c.bits.join(' → ')}\n${r?`位串（列表顺序）：${r.bits??'固定'} · 十进制：${r.value??'未就绪'} · 亮度：${r.brightness}${r.missing.length?'\n'+r.missing.join('、'):''}`:'未就绪'}`;}).join('\n\n');}
+export class OutputDisplayUI {
+ constructor(onApply,onExport){
+  this.onApply=onApply;this.onExport=onExport;this.config=defaultDisplay();this.outputs=[];this.values=new Map();this.errors=new Map();this.selected=0;
+  this.dialog=el('dialog',undefined,'display-dialog');this.dialog.setAttribute('aria-label','输出渲染配置');document.body.append(this.dialog);
+  const heading=el('div',undefined,'display-heading');heading.append(el('h2','输出渲染'),button('关闭',()=>this.dialog.close()));this.dialog.append(heading);
+  this.error=el('p','','errors');this.error.setAttribute('role','alert');this.dialog.append(this.error);
+  const toolbar=el('div',undefined,'display-fields');this.enabled=field(toolbar,'显示画板',input('','checkbox'));this.enabled.onchange=()=>this.attempt(()=>this.commit({...this.config,enabled:this.enabled.checked}));
+  this.scale=field(toolbar,'画板大小（倍）',input(1,'number'));this.scale.min=.25;this.scale.max=8;this.scale.step=.25;this.scale.title='整体缩放 0.25～8 倍，立即生效，不改变灯的行列数';this.scale.oninput=()=>this.attempt(()=>this.commit({...this.config,scale:Number(this.scale.value)}));
+  this.rows=field(toolbar,'行数',input(4,'number'));this.cols=field(toolbar,'列数',input(4,'number'));for(const n of [this.rows,this.cols]){n.min=1;n.max=32;}
+  toolbar.append(button('调整画板',()=>this.attempt(()=>{this.commit(resizeDisplay(this.config,Number(this.rows.value),Number(this.cols.value)));this.selected=Math.min(this.selected,this.config.pixels.length-1);this.render();})),button('导出模型及画板配置',()=>this.attempt(()=>{this.exportText.value=this.onExport();this.exportPanel.open=true;})));this.dialog.append(toolbar);
+  this.exportPanel=el('details');this.exportPanel.append(el('summary','导出 JSON（也可复制后重新导入）'));this.exportText=field(this.exportPanel,'导出模型 JSON',el('textarea'));this.exportText.readOnly=true;this.exportText.rows=6;this.dialog.append(this.exportPanel);
+  const batch=el('details');batch.open=true;batch.append(el('summary','批量分配 · 从左到右、从上到下'));
+  const fields=el('div',undefined,'display-fields');this.start=field(fields,'起始 Yi',select([],''));this.width=field(fields,'每通道位数',input(8,'number'));this.width.min=1;this.width.max=64;this.order=field(fields,'批量位序',select(ORDERS,'lsb-first'));this.mapping=field(fields,'批量亮度换算',select(MAPPINGS,'scale'));this.gray=field(fields,'同一组位复用为灰度',input('','checkbox'));batch.append(fields);
+  this.required=el('p','','muted');batch.append(this.required,button('批量应用到所有灯',()=>this.attempt(()=>{this.commit(batchDisplay(this.config,{start:this.start.value,width:Number(this.width.value),order:this.order.value,mapping:this.mapping.value,gray:this.gray.checked},this.outputs));this.render();})));
+  for(const n of [this.start,this.width,this.gray,this.rows,this.cols])n.addEventListener('input',()=>this.requirement());this.dialog.append(batch);
+  const body=el('div',undefined,'display-body');const previewPanel=el('section');previewPanel.append(el('h3','画板预览'));this.preview=el('div',undefined,'lamp-preview');previewPanel.append(this.preview,el('p','点击灯编辑。3D 画板位于输出节点右侧；需要取景时点击“重制视角”。','muted'));this.editor=el('section',undefined,'lamp-editor');body.append(previewPanel,this.editor);this.dialog.append(body);
+ }
+ attempt(fn){try{fn();this.error.textContent='';}catch(e){this.error.textContent=e.message;}}
+ load(config,outputs,error){this.config=structuredClone(config);this.outputs=outputs;this.errors=new Map(outputs.filter(o=>o.error).map(o=>[o.id,o.error]));this.selected=0;this.exportText.value='';this.exportPanel.open=false;this.error.textContent=error??'';this.render();}
+ commit(config){this.config=validateDisplay(config);this.selected=Math.min(this.selected,this.config.pixels.length-1);this.onApply(this.config);this.enabled.checked=this.config.enabled;this.renderPreview();this.requirement();}
+ open(index){if(Number.isInteger(index)&&index>=0&&index<this.config.pixels.length)this.selected=index;this.render();if(!this.dialog.open)this.dialog.showModal();}
+ update(values){this.values=values;if(this.dialog.open)this.refreshValues();}
+ requirement(){const needed=this.config.rows*this.config.cols*Number(this.width.value)*(this.gray.checked?1:3),at=this.outputs.findIndex(o=>o.id===this.start.value);this.required.textContent=`当前 ${this.config.rows} × ${this.config.cols} 灯需要 ${needed} 个 Yi；从所选起点可用 ${at<0?0:this.outputs.length-at} 个。调整行列后请先点击“调整画板”。`;}
+ render(){this.enabled.checked=this.config.enabled;this.scale.value=this.config.scale??1;this.rows.value=this.config.rows;this.cols.value=this.config.cols;const old=this.start.value;this.start.replaceChildren();for(const o of this.outputs){const n=el('option',o.id+(o.error?'（异常）':''));n.value=o.id;this.start.append(n);}if(this.outputs.some(o=>o.id===old))this.start.value=old;this.requirement();this.renderPreview();this.renderEditor();}
+ renderPreview(){this.preview.style.gridTemplateColumns=`repeat(${this.config.cols}, minmax(14px, 1fr))`;this.preview.replaceChildren();this.previewButtons=this.config.pixels.map((_,i)=>{const b=button(String(i+1),()=>{this.selected=i;this.renderEditor();this.refreshValues();});b.className='lamp-tile';b.setAttribute('aria-label',`灯 ${i+1}`);this.preview.append(b);return b;});this.refreshValues();}
+ refreshValues(){this.config.pixels.forEach((p,i)=>{const r=evaluatePixel(p,this.values,this.errors),b=this.previewButtons?.[i];if(!b)return;const rgb=CHANNELS.map(k=>r[k].brightness);b.style.backgroundColor=`rgb(${rgb.join(',')})`;b.style.color=rgb.reduce((a,b)=>a+b,0)>350?'#08111e':'#e8efff';b.classList.toggle('not-ready',CHANNELS.some(k=>!r[k].ready));b.classList.toggle('chosen',i===this.selected);b.title=`灯 ${i+1}\n`+lampDetails(p,r);});if(this.readout){const p=this.config.pixels[this.selected];this.readout.textContent=lampDetails(p,evaluatePixel(p,this.values,this.errors));}}
+ bitsEditor(parent,title,bits){const wrap=el('div',undefined,'bits-editor');parent.append(wrap);const area=field(wrap,title,el('textarea'));area.value=bits.join(', ');area.rows=2;area.spellcheck=false;area.placeholder='Y0, Y1, Y2（按此顺序组合）';const add=select(this.outputs.map(o=>[o.id,o.id+(o.error?'（异常）':'')]),this.outputs[0]?.id);field(wrap,'添加 Yi',add);const list=el('div',undefined,'bit-order-list');const redraw=()=>{list.replaceChildren();parseBits(area.value).forEach((id,i)=>{const row=el('div');const move=delta=>{const ids=parseBits(area.value),j=i+delta;if(j<0||j>=ids.length)return;[ids[i],ids[j]]=[ids[j],ids[i]];area.value=ids.join(', ');redraw();};row.append(el('span',`${i+1}. ${id}`),button('↑',()=>move(-1)),button('↓',()=>move(1)),button('移除',()=>{const ids=parseBits(area.value);ids.splice(i,1);area.value=ids.join(', ');redraw();}));row.children[1].setAttribute('aria-label',`${title} 第 ${i+1} 位上移`);row.children[2].setAttribute('aria-label',`${title} 第 ${i+1} 位下移`);list.append(row);});};wrap.append(button('添加到末尾',()=>{if(add.value){area.value=[...parseBits(area.value),add.value].join(', ');redraw();}}),list);area.oninput=redraw;redraw();return ()=>parseBits(area.value);}
+ renderEditor(pixel=this.config.pixels[this.selected]){
+  this.editor.replaceChildren();this.editor.append(el('h3',`灯 ${this.selected+1} · 第 ${Math.floor(this.selected/this.config.cols)+1} 行，第 ${this.selected%this.config.cols+1} 列`));
+  const mode=field(this.editor,'编辑模式',select([['channels','独立 R/G/B'],['packed','RGB 打包']],pixel.mode));
+  mode.onchange=()=>{if(mode.value===pixel.mode)return;this.attempt(()=>{if(mode.value==='channels')this.renderEditor(convertPixel(pixel,'channels'));else{try{this.renderEditor(convertPixel(pixel,'packed'));}catch{this.renderEditor({mode:'packed',bits:[],widths:{r:8,g:8,b:8},order:'lsb-first',mapping:'scale'});}}});};
+  this.editor.append(el('p','编辑后点击“应用到此灯”。切换编辑模式不会自动覆盖已保存配置。','muted'));
+  this.editor.append(button(pixel.mode==='packed'?'无损转为独立配置':'无损转为 RGB 打包',()=>this.attempt(()=>{const next=structuredClone(this.config);next.pixels[this.selected]=convertPixel(this.config.pixels[this.selected],pixel.mode==='packed'?'channels':'packed');this.commit(next);this.renderEditor();})));
+  const getters={};let getBits,orders,mappings,widths={};
+  if(pixel.mode==='packed'){
+   getBits=this.bitsEditor(this.editor,'打包 Yi 列表（依次分为 R、G、B）',pixel.bits);const fields=el('div',undefined,'display-fields');this.editor.append(fields);
+   for(const k of CHANNELS){widths[k]=field(fields,`${k.toUpperCase()} 位数`,input(pixel.widths[k],'number'));widths[k].min=1;widths[k].max=64;}
+   orders=field(fields,'打包位序',select(ORDERS,pixel.order));mappings=field(fields,'打包亮度换算',select(MAPPINGS,pixel.mapping));
+  }else for(const k of CHANNELS){
+   const c=pixel.channels[k],box=el('fieldset');box.append(el('legend',k.toUpperCase()));this.editor.append(box);
+   const kind=field(box,`${k.toUpperCase()} 来源`,select([['fixed','固定亮度'],['bits','Yi 位组合']],c.kind));const controls=el('div');box.append(controls);
+   const draw=()=>{controls.replaceChildren();if(kind.value==='fixed'){const radix=field(controls,`${k.toUpperCase()} 数值进制`,select([['10','十进制'],['2','二进制']],10)),value=field(controls,`${k.toUpperCase()} 固定亮度`,input(c.kind==='fixed'?c.value:0));let previous=10;radix.onchange=()=>this.attempt(()=>{const n=parseBrightness(value.value,previous);previous=Number(radix.value);value.value=n.toString(previous);});getters[k]=()=>({kind:'fixed',value:parseBrightness(value.value,Number(radix.value))});}else{const bits=this.bitsEditor(controls,`${k.toUpperCase()} Yi 列表`,c.kind==='bits'?c.bits:[]),o=field(controls,`${k.toUpperCase()} 位序`,select(ORDERS,c.order??'lsb-first')),m=field(controls,`${k.toUpperCase()} 亮度换算`,select(MAPPINGS,c.mapping??'scale'));getters[k]=()=>({kind:'bits',bits:bits(),order:o.value,mapping:m.value});}};kind.onchange=draw;draw();
+  }
+  this.editor.append(button('应用到此灯',()=>this.attempt(()=>{const p=pixel.mode==='packed'?{mode:'packed',bits:getBits(),widths:Object.fromEntries(CHANNELS.map(k=>[k,Number(widths[k].value)])),order:orders.value,mapping:mappings.value}:{mode:'channels',channels:Object.fromEntries(CHANNELS.map(k=>[k,getters[k]()]))};const next=structuredClone(this.config);next.pixels[this.selected]=p;this.commit(next);this.renderEditor();})));
+  this.editor.append(el('h4','已应用配置 · 实时值'));this.readout=el('pre',undefined,'lamp-readout');this.editor.append(this.readout);this.refreshValues();
+ }
+}

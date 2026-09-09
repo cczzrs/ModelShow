@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {compileModel,JKEngine} from '../src/engine.js';
-import {createLayout,LAYOUT_MODES,spherePoints,layoutEdges} from '../src/layout.js';
+import {createLayout,LAYOUT_MODES,spherePoints,layoutEdges,readability} from '../src/layout.js';
 const make=(ex,outputs=[])=>compileModel({nodes:ex.map((ex,i)=>({id:`Q${i}`,ex})),initial_q:{'0':[],'1':[]},q_y:outputs});
 const fixture=()=>compileModel(JSON.parse(readFileSync(new URL('jk-logic-structure-v262.json',import.meta.url),'utf8')));
 const b=ps=>Object.fromEntries(['x','y','z'].map(a=>[a,[Math.min(...ps.map(p=>p[a])),Math.max(...ps.map(p=>p[a]))]]));
@@ -11,11 +11,18 @@ const separation=r=>{const ps=[...r.positions.values()];for(let i=0;i<ps.length;
 test('all layouts deterministic, finite and separated for fixture, singleton, empty and feedback graphs',()=>{
  for(const model of [fixture(),make(['J0K(X0)']),make([]),make(['J0K(Q1)','J0K(Q0)','J0K(Q2)','J0'])])for(const mode of LAYOUT_MODES){const r=createLayout(model,mode);assert.deepEqual(r,createLayout(model,mode));separation(r);assert.ok(Number.isFinite(r.metrics.score));}
 });
-test('1D has exactly three vertical columns, numbered from top to bottom on Y',()=>{
+test('1D has three vertical columns, numbered from top to bottom on Y with Z zero',()=>{
  const model=fixture(),r=createLayout(model,'1D');
  const columns=[model.inputs,model.nodes.map(n=>n.key),model.outputs.map(o=>o.id)];
  let last=-Infinity;
  for(const keys of columns){const ps=keys.map(k=>r.positions.get(k));assert.equal(new Set(ps.map(p=>p.x)).size,1);assert.ok(ps.every(p=>p.z===0));assert.ok(ps[0].x>last);last=ps[0].x;for(let i=1;i<ps.length;i++)assert.equal(ps[i-1].y-ps[i].y,1);}
+});
+test('swapped axes fill all node groups downward on Y with matching world bounds and scores',()=>{
+ const model=make(Array.from({length:5},(_,i)=>`J0K(X${i})`),Array.from({length:5},(_,i)=>({['Y'+i]:'Q'+i}))),r=createLayout(model,'2D');
+ for(const keys of [model.inputs,model.nodes.map(n=>n.key),model.outputs.map(o=>o.id)]){
+  const ps=keys.map(k=>r.positions.get(k));assert.deepEqual(ps.map(p=>[p.y,p.z]),[[.5,1],[.5,0],[.5,-1],[-.5,1],[-.5,0]]);
+ }
+ for(const mode of LAYOUT_MODES){const layout=createLayout(model,mode),box=b([...layout.positions.values()]);for(const axis of ['x','y','z']){assert.equal(layout.bounds.min[axis],box[axis][0]);assert.equal(layout.bounds.max[axis],box[axis][1]);}assert.equal(layout.axisOrder,layout.mode==='1D'?'xyz':'x,-z,y');const metrics=readability(layout,layoutEdges(model));assert.ok(Math.abs(metrics.score-layout.metrics.score)<1e-9);}
 });
 test('2D gives each category a nearly square YZ plane centered along the X axis',()=>{
  const model=fixture(),r=createLayout(model,'2D');
@@ -60,7 +67,11 @@ test('5D chooses minimum own-reference distance among available spherical slots,
  assert.deepEqual(positions,r.positions);
 });
 test('automatic chooses only the five defined modes and the lowest candidate score',()=>{
- const model=fixture(),auto=createLayout(model);assert.ok(LAYOUT_MODES.slice(1).includes(auto.mode));for(const mode of LAYOUT_MODES.slice(1))assert.ok(auto.metrics.score<=createLayout(model,mode).metrics.score+1e-9);
+ const model=fixture(),auto=createLayout(model,'auto');assert.ok(LAYOUT_MODES.slice(1).includes(auto.mode));for(const mode of LAYOUT_MODES.slice(1))assert.ok(auto.metrics.score<=createLayout(model,mode).metrics.score+1e-9);
+ if(auto.mode==='1D')assert.deepEqual(auto.positions,createLayout(model,'1D').positions);
+});
+test('omitting the layout mode selects 4D topology rather than automatic selection',()=>{
+ const model=fixture(),layout=createLayout(model);assert.equal(layout.mode,'4D');assert.equal(layout.requestedMode,'4D');assert.equal(layout.automatic,undefined);assert.deepEqual(layout.positions,createLayout(model,'4D').positions);
 });
 test('layout changes leave model, q and queued execution unchanged',()=>{
  const e=new JKEngine(fixture());e.send(Object.fromEntries(e.model.inputs.map(k=>[k,0])));const before={length:e.length,item:e.itemAt(0),q:[...e.latest],model:structuredClone(e.model)};
