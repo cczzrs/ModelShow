@@ -57,4 +57,6 @@
 - 保存的站点包可解压后通过本地 HTTP 服务查看 `dist/`；不要直接以 `file://` 打开，因为模块、Worker 和 WebGPU 需要合适的浏览器上下文。
 - Sites 版本保存与部署分离。本任务只保存版本，不调用部署或修改访客范围。
 
-平台契约依据：本机 Sites 插件 0.1.62 的 `sites-building`、portable setup/preview、registration、`sites-hosting`、publishing，以及静态打包校验器；已对照当前项目源码和本次构建/浏览器结果。本文不推断尚未取得的远端响应头或部署结果。
+当前保存状态：本地源码和预览包已保存；Site 已注册但未发布。完整项目源码推送被自动审批拒绝，理由为缺少将完整源码传到该 Site 专属远端仓库的明确授权。因此尚未推送源码或调用云端版本保存，云端版本号不存在。继续云端保存前需要用户明确允许该源码传输；即使允许，仍只保存、不部署。
+
+平台契约依据：开始时读取本机 Sites 插件 0.1.62 的 `sites-building`、portable setup/preview、registration、`sites-hosting`、publishing，以及静态打包校验器。执行期间该缓存路径不再存在，最终本地打包使用重新发现并核对的 bundled Sites 0.1.57 官方 `package-site.sh` 及静态校验器，静态目录契约一致。已对照当前项目源码和本次构建/浏览器结果；本文不推断尚未取得的远端响应头或部署结果。
