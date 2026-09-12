@@ -1,15 +1,13 @@
 /** Deterministic JK interpreter. No rendering, clocks, or browser dependencies. */
-export const order = (a, b) => {
-  const x = BigInt(a.slice(1)), y = BigInt(b.slice(1));
-  return x < y ? -1 : x > y ? 1 : 0;
-};
+import { JK_ID_SOURCE, parseJKId, validateNodeTag, resolveJKReference, order } from './node-id.js';
+export { order } from './node-id.js';
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 export function parseExpression(ex) {
   if (typeof ex !== 'string') throw new Error('ex 必须是字符串');
   const source = ex.replace(/\s/g, '');
   if (!source) throw new Error('ex 不能为空');
   const tokens = [];
-  const re = /([JK])(?:([01])|\(([XQ](?:0|[1-9]\d*))\))/y;
+  const re = new RegExp(`([JK])(?:([01])|\\((X(?:0|[1-9]\\d*)|${JK_ID_SOURCE})\\))`, 'y');
   let pos = 0;
   while (pos < source.length) {
     re.lastIndex = pos;
@@ -25,27 +23,48 @@ export function compileModel(raw) {
   if (!Array.isArray(raw.initial_q['0']) || !Array.isArray(raw.initial_q['1'])) throw new Error('initial_q 的 0、1 必须都是数组');
   const issues = [], byId = new Map(), inputs = new Set();
   const nodes = raw.nodes.map((data, i) => {
-    const n = { key: `node-${i}`, id: String(data?.id ?? `无编号-${i}`), ex: data?.ex, errors: [], tokens: [], initial: null, sources: [], required: [] };
-    if (!/^Q(0|[1-9]\d*)$/.test(n.id)) n.errors.push('JK 节点 ID 必须为 Q + 非负整数（无前导零）');
+    const originalId = String(data?.id ?? `无编号-${i}`);
+    const n = { key: `node-${i}`, originalId, id: originalId, tag: null, displayName: originalId, ex: data?.ex, errors: [], tokens: [], initial: null, sources: [], required: [] };
+    let identity;
+    try { identity = parseJKId(data?.id); n.id = identity.id; n.tag = identity.tag; }
+    catch (e) { n.errors.push(e.message); }
+    if (object(data) && Object.hasOwn(data, 'tag')) {
+      try {
+        const tag = validateNodeTag(data.tag);
+        if (identity?.tag && identity.tag !== tag) n.errors.push(`ID 标记 ${identity.tag} 与 tag ${tag} 不一致`);
+        else n.tag = tag;
+      } catch (e) { n.errors.push(e.message); }
+    }
+    if (identity) n.displayName = n.id + (n.tag ?? '');
     try { n.tokens = parseExpression(n.ex); } catch (e) { n.errors.push(e.message); }
     if (!byId.has(n.id)) byId.set(n.id, []);
     byId.get(n.id).push(n);
     return n;
   });
-  for (const group of byId.values()) if (group.length > 1) group.forEach(n => n.errors.push('节点 ID 重复，所有同名节点均禁止执行'));
+  for (const group of byId.values()) if (group.length > 1) group.forEach(n => n.errors.push(`节点 ID 重复：${n.id}，所有同编号节点均禁止执行`));
   const assigned = new Set();
-  for (const bit of [0, 1]) for (const id of raw.initial_q[bit]) {
+  for (const bit of [0, 1]) for (const reference of raw.initial_q[bit]) {
+    const {id, error} = resolveJKReference(reference, byId);
     const group = byId.get(id);
-    if (!group) { issues.push(`initial_q 引用不存在的节点：${String(id)}`); continue; }
+    if (error) {
+      issues.push(`initial_q ${error}`);
+      // A known node with an invalid initialization must not fall back to stateless execution.
+      if (group) group.forEach(n => n.errors.push(`initial_q ${error}`));
+      continue;
+    }
     if (assigned.has(id)) group.forEach(n => n.errors.push('initial_q 重复赋值或 0/1 冲突'));
     assigned.add(id); group.forEach(n => { n.initial = bit; });
   }
   for (const n of nodes) {
+    for (const token of n.tokens) if (token.source?.startsWith('Q')) {
+      const {id, error} = resolveJKReference(token.source, byId);
+      token.originalSource = token.source; token.source = id;
+      if (error) n.errors.push(error);
+    }
     n.sources = [...new Set(n.tokens.flatMap(t => t.source ? [t.source] : []))];
     if (n.initial === null && n.tokens[0]?.text !== 'J0') n.errors.push('无状态 JK 节点必须以 J0 开头');
     for (const s of n.sources) {
       if (s.startsWith('X')) inputs.add(s);
-      else if (!byId.has(s)) n.errors.push(`引用不存在：${s}`);
     }
   }
   let changed = true;
@@ -60,11 +79,12 @@ export function compileModel(raw) {
   const outputMap = new Map();
   for (const entry of raw.q_y) {
     if (!object(entry) || Object.keys(entry).length !== 1) { issues.push('q_y 每项必须为一个 {Yi: Qj} 映射'); continue; }
-    const [id, source] = Object.entries(entry)[0];
+    const [id, originalSource] = Object.entries(entry)[0];
     if (!/^Y(0|[1-9]\d*)$/.test(id)) { issues.push(`无效输出 ID：${id}`); continue; }
-    const error = typeof source !== 'string' || !/^Q(0|[1-9]\d*)$/.test(source) || !byId.has(source) ? '输出引用不存在或格式错误' : byId.get(source).some(n => n.errors.length) ? '输出依赖异常' : null;
+    const resolved = resolveJKReference(originalSource, byId), source = resolved.id;
+    const error = resolved.error ? `输出${resolved.error}` : byId.get(source).some(n => n.errors.length) ? '输出依赖异常' : null;
     if (outputMap.has(id)) { outputMap.get(id).error = '输出 ID 重复'; issues.push(`输出 ID 重复：${id}`); }
-    else outputMap.set(id, { id, source, error });
+    else outputMap.set(id, { id, source, originalSource, error });
   }
   const outputs = [...outputMap.values()].sort((a,b) => order(a.id,b.id));
   const valid = nodes.filter(n => !n.errors.length);
@@ -81,7 +101,7 @@ export class JKEngine {
     this.model = model; this.queueLimit = queueLimit; this.historyLimit = historyLimit; this.reset();
   }
   reset() {
-    this.queue = []; this.head = 0; this.nextId = 1; this.total = 0;
+    this.queue = []; this.head = 0; this.nextId = 1; this.total = 0; this.exTotal = 0;
     this.q = new Map(); this.cache = new Map(); this.latest = new Map(); this.counts = new Map(); this.last = new Map(); this.history = [];
     this.outputs = new Map(this.model.outputs.map(o => [o.id, null]));
     for (const n of this.model.nodes) {
@@ -140,7 +160,7 @@ export class JKEngine {
       operations.push({ token: t.text, before: previous, input: x, after: value });
     }
     if (n.initial !== null) this.q.set(n.id, value);
-    this.total++; this.counts.set(n.key, this.counts.get(n.key) + 1);
+    this.total++; this.exTotal += operations.length; this.counts.set(n.key, this.counts.get(n.key) + 1);
     const transfers = []; this.publish(n.id, value, transfers);
     const event = { type: 'execution', ticket: item.ticket, node: n.id, before, value, reads, operations, transfers, total: this.total };
     this.last.set(n.key, event);

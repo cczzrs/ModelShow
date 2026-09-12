@@ -7,7 +7,7 @@ export class ImageInputUI {
     this.onApply = onApply;
     this.onApplied = onApplied;
     this.config = defaultImageInputConfig();
-    this.selection = { x: 0, y: 0, width: 8, height: 8 };
+    this.selection = { x: 0, y: 0, width: 3, height: 3 };
     this.inputIds = [];
     this.modelVersion = 0;
     this.generation = 0;
@@ -16,12 +16,16 @@ export class ImageInputUI {
     this.dialog.className = 'image-input-dialog';
     this.dialog.setAttribute('aria-label', '输入数据提取');
     this.dialog.innerHTML = `
-      <div class="image-input-heading"><div><div class="eyebrow">IMAGE → Xi</div><h2>输入数据提取</h2></div><button class="button" data-action="close">关闭</button></div>
-      <div class="image-input-import"><button class="button" data-action="choose">选择图片</button><span data-info="file">PNG / JPEG / WebP · 最大 32 MB、1600 万像素</span></div>
+      <div class="image-input-heading"><div><div class="eyebrow">IMAGE → Xi</div><h2>输入数据提取</h2></div>
+        <span data-info="file">PNG / JPEG / WebP · 最大 32 MB、1600 万像素</span>
+        <button class="button" data-action="choose">选择图片</button>
+        <button class="button primary" data-action="apply" disabled>填入信号输入框</button>
+        <button class="button" data-action="close">关闭</button>
+      </div>
       <input type="file" accept=".png,.apng,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" hidden>
       <div class="image-input-fields">
-        <label>选框宽（原图像素）<input name="width" type="number" min="1" step="1" value="8"></label>
-        <label>选框高（原图像素）<input name="height" type="number" min="1" step="1" value="8"></label>
+        <label>选框宽（原图像素）<input name="width" type="number" min="1" step="1" value="3"></label>
+        <label>选框高（原图像素）<input name="height" type="number" min="1" step="1" value="3"></label>
         <label>X 坐标<input name="x" type="number" min="0" step="1" value="0"></label>
         <label>Y 坐标<input name="y" type="number" min="0" step="1" value="0"></label>
         <label>像素格式<select name="encoding"><option value="rgb">RGB 8 位</option><option value="gray">灰度 8 位</option></select></label>
@@ -31,20 +35,21 @@ export class ImageInputUI {
       </div>
       <div class="image-input-body">
         <div class="image-input-workspace">
-          <div class="image-input-tools"><button class="button small" data-action="fit">适应窗口</button><button class="button small" data-action="original">原始比例</button><span data-info="zoom">100%</span></div>
-          <div class="image-input-stage"><canvas tabindex="0" aria-label="图片选区"></canvas><span class="image-input-empty">选择一张本地图片开始提取</span></div>
+          <div class="image-input-tools"><button class="button small" data-action="fit">适应窗口</button><button class="button small" data-action="original">原始比例</button>
           <p class="image-input-help">左键拖动选框 · 空格＋拖动 / 中键平移 · 滚轮围绕鼠标缩放</p>
-          <div data-info="coords" class="image-input-coords">选区坐标以原图左上角为 (0, 0)</div>
+          <span data-info="zoom">100%</span></div>
+          <div class="image-input-stage" style="height: 390px;"><canvas tabindex="0" aria-label="图片选区"></canvas><span class="image-input-empty">选择一张本地图片开始提取</span></div>
         </div>
         <div class="image-input-results">
-          <label>提取像素预览<canvas class="image-input-preview" width="280" height="150" aria-label="提取像素预览"></canvas></label>
+          <label>提取像素预览
+          <div data-info="coords" class="image-input-coords">选区坐标以原图左上角为 (0, 0)</div>
+          <canvas class="image-input-preview" width="280" height="150" aria-label="提取像素预览"></canvas></label>
           <div data-info="capacity" class="image-input-capacity" role="status"></div>
           <label>Xi JSON 预览<textarea class="image-input-json" readonly aria-label="Xi JSON 预览" spellcheck="false"></textarea></label>
           <span data-info="omitted" class="image-input-help"></span>
         </div>
       </div>
-      <div class="errors" data-info="error" role="alert" hidden></div>
-      <div class="image-input-footer"><span>仅填入文本，由“发送信号”执行。图片仅保留在本页面会话。</span><button class="button primary" data-action="apply" disabled>填入信号输入框</button></div>`;
+      <div class="errors" data-info="error" role="alert" hidden></div>`;
     document.body.append(this.dialog);
     this.field = name => this.dialog.querySelector(`[name="${name}"]`);
     this.info = name => this.dialog.querySelector(`[data-info="${name}"]`);

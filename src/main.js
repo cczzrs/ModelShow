@@ -6,6 +6,8 @@ import { loadDisplay, exportDisplayModel } from './output-display.js';
 import { OutputDisplayUI, lampDetails } from './output-display-ui.js';
 import { NetworkView } from './view.js';
 import { ImageInputUI } from './image-input-ui.js';
+import { displayNodeId } from './node-id.js';
+import { setupSceneFullscreen } from './fullscreen.js';
 const $ = id => document.getElementById(id);
 const el = (tag, text, className) => { const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e; };
 let model,engine,playback,selected,view,importGeneration=0,modelVersion=0;
@@ -23,7 +25,7 @@ const imageUI=new ImageInputUI((json,version)=>{
   message('已填入图片像素数据，点击“发送信号”执行。');
 },()=>$('input-json').focus());
 function message(text,error=false){$('message').textContent=text;$('message').classList.toggle('error',error);}
-function select(key,toggle=true){selected=toggle&&selected===key?null:key;view?.select(selected);for(const [k,b]of pickerElements)b.classList.toggle('active',k===selected);renderInspector();}
+function select(key,toggle=true){selected=toggle&&selected===key?null:key;view?.select(selected);for(const [k,b]of pickerElements)b.classList.toggle('active',k===selected);$('inspector').closest('.inspector').classList.toggle('has-selection',selected!=null);renderInspector();}
 function renderInspector(){
   if(!model)return;
   const box=$('inspector');box.replaceChildren();
@@ -32,19 +34,21 @@ function renderInspector(){
     if(pixel){box.append(el('pre',lampDetails(pixel,view.outputState.results[index]),'lamp-readout'));const edit=el('button','编辑此灯','button');edit.onclick=()=>displayUI.open(index);box.append(edit);}else box.append(el('p','该灯已移除。','muted'));return;
   }
   const n=model.nodes.find(n=>n.key===selected);
-  $('selected-id').textContent=n?.id??selected??'—';
+  $('selected-id').textContent=n?.displayName??n?.id??selected??'—';
   if(!n){
     if(selected==null){box.append(el('p','选择节点，查看状态与求值过程。','muted'));return;}
     if(model.inputs.includes(selected)){box.append(el('p','输入节点 · 无持久状态','muted'),el('div',`最近发送：${engine.latest.get(selected)??'未发送'}`,'expression'));}
-    else {const o=model.outputs.find(o=>o.id===selected);if(o){box.append(el('p',`输出来源 ${o.source}`,'muted'),el('div',o.error??`最近输出：${engine.outputs.get(o.id)??'未输出'}`,'expression'));}}
+    else {const o=model.outputs.find(o=>o.id===selected);if(o){box.append(el('p',`输出来源 ${o.error?o.originalSource??o.source:displayNodeId(model,o.source)}`,'muted'),el('div',o.error??`最近输出：${engine.outputs.get(o.id)??'未输出'}`,'expression'));}}
     return;
   }
-  box.append(el('code',String(n.ex??'缺失 ex'),'expression'));
+  const identity=el('div',undefined,'detail-grid');
+  for(const [name,value]of [['固定 ID',n.id],['标记',n.tag??'无']]){const cell=el('div');cell.append(el('span',name),el('b',String(value)));identity.append(cell);}
+  box.append(identity,el('code',String(n.ex??'缺失 ex'),'expression'));
   if(n.errors.length){box.append(el('div',n.errors.join('；'),'errors'));return;}
   const grid=el('div',undefined,'detail-grid');
   for(const [name,value]of [['持久 q',n.initial===null?'无状态':engine.q.get(n.id)],['最近输出',engine.latest.get(n.id)??'—'],['执行次数',engine.counts.get(n.key)],['类型',n.initial===null?'无状态':'有状态']]){const cell=el('div');cell.append(el('span',name),el('b',String(value)));grid.append(cell);}
   box.append(grid);
-  const wait=engine.waiting(n),cached=[...engine.cache.get(n.key)].map(([k,v])=>`${k}=${v}`).join(', ');
+  const wait=engine.waiting(n).map(id=>displayNodeId(model,id)),cached=[...engine.cache.get(n.key)].map(([k,v])=>`${displayNodeId(model,k)}=${v}`).join(', ');
   box.append(el('div',n.required.length?`下一次触发等待：${wait.join('、')||'参数已齐'}${cached?' · 已收到 '+cached:''}`:'无到齐条件 · 每次参数通知触发','waiting'));
   const last=engine.last.get(n.key);
   if(last){const detail=el('details');detail.open=true;detail.append(el('summary',`最近求值 #${last.ticket} · 实际读取参数`));detail.append(el('pre',JSON.stringify(last.reads),'operation-list'));const ops=el('div',undefined,'operation-list');for(const op of last.operations)ops.append(el('div',`${op.token} : ${op.before} ${op.token[0]==='J'?'AND':'XOR'} ${op.input} → ${op.after}`));detail.append(ops);box.append(detail);}
@@ -57,7 +61,7 @@ function renderQueue(){
   const start=Math.max(0,Math.floor(host.scrollTop/rowHeight)-2),end=Math.min(engine.length,start+Math.ceil(host.clientHeight/rowHeight)+5);
   $('queue-rows').style.transform=`translateY(${start*rowHeight}px)`;
   const frag=document.createDocumentFragment();
-  for(let i=start;i<end;i++){const item=engine.itemAt(i),row=el('div',undefined,'queue-row'),left=el('button');left.append(el('em',`#${item.ticket}`),el('span',item.node.id));left.onclick=()=>select(item.node.key);const val=el('span',Object.entries(item.values).map(([k,v])=>`${k}:${v}`).join(' ')||'执行时读取 q','values');val.title=JSON.stringify(item.values);row.append(left,val);frag.append(row);}
+  for(let i=start;i<end;i++){const item=engine.itemAt(i),row=el('div',undefined,'queue-row'),left=el('button');left.append(el('em',`#${item.ticket}`),el('span',item.node.displayName??item.node.id));left.onclick=()=>select(item.node.key);const val=el('span',Object.entries(item.values).map(([k,v])=>`${displayNodeId(model,k)}:${v}`).join(' ')||'执行时读取 q','values');val.title=JSON.stringify(item.values);row.append(left,val);frag.append(row);}
   $('queue-rows').replaceChildren(frag);$('queue-empty').hidden=engine.length>0;
 }
 function update(){
@@ -65,6 +69,7 @@ function update(){
   for(const o of model.outputs){const cell=outputElements.get(o.id),v=engine.outputs.get(o.id);cell.textContent=o.error?'异常':v===null?'未输出':String(v);cell.classList.toggle('empty',v===null);}
   $('total').textContent=engine.total.toLocaleString();$('play').textContent=playback.running?'Ⅱ 暂停':'▶ 继续';
   $('total2').textContent=engine.total.toLocaleString();
+  $('EXtotal').textContent=engine.exTotal.toLocaleString();
   $('step').disabled=false;
   const status=engine.capacityReached?'队列保护 · 已暂停':!playback.running?'已暂停':engine.length||playback.active||playback.visuals.length?'运行中':model.valid.some(n=>engine.waiting(n).length)?'等待输入':'就绪';
   $('run-status').textContent=status;
@@ -74,7 +79,7 @@ function update(){
   for(const event of engine.history.slice(-60).reverse()){
     const row=el('div',undefined,'history-row');
     if(event.type==='input')row.append(el('span','↗ '+(event.accepted.join(' · ')||'无匹配输入')),el('b','发送'));
-    else row.append(el('span',`#${event.ticket}  ${event.node}`),el('b',`${event.before===null?'·':event.before} → ${event.value}`));fragment.append(row);
+    else row.append(el('span',`#${event.ticket}  ${displayNodeId(model,event.node)}`),el('b',`${event.before===null?'·':event.before} → ${event.value}`));fragment.append(row);
   }
   $('history').replaceChildren(fragment);renderQueue();view?.refresh(engine);displayUI.update(engine.outputs);renderInspector();
 }
@@ -87,14 +92,15 @@ function install(raw){
   updateSpeedControl();
   $('model-name').textContent=String(raw.name??'未命名模型');$('model-md5').textContent=`MD5: ${raw.md5??'未提供'}`;$('stat-nodes').textContent=model.nodes.length;$('stat-state').textContent=model.nodes.filter(n=>n.initial!==null).length;
   $('stat-edges').textContent=model.nodes.reduce((sum,n)=>sum+n.tokens.filter(t=>t.source).length,0)+model.outputs.length;
-  const issues=[...model.issues,...model.nodes.flatMap(n=>n.errors.map(e=>`${n.id}：${e}`)),...model.outputs.filter(o=>o.error).map(o=>`${o.id}：${o.error}`)];
+  $('stat-ex').textContent=model.nodes.reduce((sum,n)=>sum+n.tokens.length,0);//.toLocaleString();
+  const issues=[...model.issues,...model.nodes.flatMap(n=>n.errors.map(e=>`${n.displayName??n.id}：${e}`)),...model.outputs.filter(o=>o.error).map(o=>`${o.id}：${o.error}`)];
   $('model-errors').hidden=!issues.length;$('model-errors').textContent=issues.join('\n');
   $('metadata').textContent=JSON.stringify(Object.fromEntries(Object.entries(raw).filter(([k])=>!['nodes','initial_q','q_y'].includes(k))),null,2);
   $('outputs').replaceChildren();outputElements.clear();
-  for(const o of model.outputs){const row=el('div',undefined,'output-row'),value=el('span','未输出','output-value empty');row.append(el('span',o.id),el('span',o.source,'source'),value);$('outputs').append(row);outputElements.set(o.id,value);}
+  for(const o of model.outputs){const row=el('div',undefined,'output-row'),value=el('span','未输出','output-value empty');row.append(el('span',o.id),el('span',o.error?o.originalSource??o.source:displayNodeId(model,o.source),'source'),value);$('outputs').append(row);outputElements.set(o.id,value);}
   if(!model.outputs.length)$('outputs').append(el('p','此模型没有输出映射','muted'));
   $('node-picker').replaceChildren();pickerElements.clear();
-  for(const item of [...model.inputs.map(id=>({id,key:id})),...model.nodes,...model.outputs.map(o=>({id:o.id,key:o.id,errors:o.error?[o.error]:[]}))]){const b=el('button',item.id);b.classList.toggle('bad',!!item.errors?.length);b.onclick=()=>select(item.key);$('node-picker').append(b);pickerElements.set(item.key,b);}
+  for(const item of [...model.inputs.map(id=>({id,key:id})),...model.nodes,...model.outputs.map(o=>({id:o.id,key:o.id,errors:o.error?[o.error]:[]}))]){const b=el('button',item.displayName??item.id);b.classList.toggle('bad',!!item.errors?.length);b.onclick=()=>select(item.key);$('node-picker').append(b);pickerElements.set(item.key,b);}
   const defaults=Object.fromEntries(model.inputs.map(id=>[id,0]));
   if(model.inputs.join(',')==='X0,X1,X2,X3')Object.assign(defaults,{X0:1,X2:1});
   $('input-json').value=JSON.stringify(defaults);$('queue').scrollTop=0;
@@ -134,6 +140,7 @@ $('layout-buttons').onclick=event=>{
 };
 $('output-render').onclick=()=>displayUI.open();
 $('camera-reset').onclick=()=>view?.resetCamera();
+setupSceneFullscreen(document.querySelector('.main-view'),$('scene-fullscreen'),document.querySelector('.inspector'));
 $('node-labels').onclick=()=>{const button=$('node-labels'),hidden=button.getAttribute('aria-pressed')!=='true';button.setAttribute('aria-pressed',String(hidden));button.textContent=hidden?'显示名称和次数':'隐藏名称和次数';view?.setNodeLabelsHidden(hidden);};
 $('black-background').onclick=()=>{const enabled=$('black-background').getAttribute('aria-pressed')!=='true';$('black-background').setAttribute('aria-pressed',String(enabled));view?.setBlackBackground(enabled);};
 function importError(error) {

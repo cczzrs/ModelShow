@@ -1,11 +1,11 @@
 /** Deterministic layouts in world units. This module never reads or mutates runtime q. */
-import { order } from './engine.js';
+import { compareNodes } from './node-id.js';
 export const LAYOUT_MODES = ['auto', '1D', '2D', '3D', '4D', '5D'];
 export const DEFAULT_LAYOUT_MODE = '4D';
 const EPS = 1e-9;
 const radius2 = p => p.x*p.x + p.y*p.y + p.z*p.z;
 const distance = (a,b) => Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
-const nodeOrder = (a,b) => /^Q\d+$/.test(a.id) && /^Q\d+$/.test(b.id) ? order(a.id,b.id) || a.key.localeCompare(b.key) : a.key.localeCompare(b.key);
+const nodeOrder = compareNodes;
 const centerOrder = (a,b) => radius2(a)-radius2(b) || a.x-b.x || a.y-b.y || a.z-b.z;
 const parameterCount = n => n.tokens.filter(t=>t.source).length;
 const negate = value => value===0?0:-value;

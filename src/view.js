@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { OutputBoard } from './output-board.js';
 import { DisplayState, defaultDisplay } from './output-display.js';
 import { EditorControls } from './editor-controls.js';
-import { order } from './engine.js';
+import { compareNodes } from './node-id.js';
 import { createLayout, DEFAULT_LAYOUT_MODE } from './layout.js';
 import { disposeGroup } from './resources.js';
 import { FloatingEdgeCurve, assignEdgeLanes, updateTubeGeometry } from './edge-curves.js';
@@ -193,16 +193,16 @@ export class NetworkView {
     this.labels=new NodeLabels();this.group.add(this.labels.group);
     this.model = model; this.engine = null;
     this.outputState.configure(this.outputState.config,model.outputs);this.pendingLampDirty.clear();this.syncOutputs();
-    const sorted = [...model.nodes].sort((a,b) => /^Q\d+$/.test(a.id)&&/^Q\d+$/.test(b.id) ? order(a.id,b.id) : a.key.localeCompare(b.key));
+    const sorted = [...model.nodes].sort(compareNodes);
     this.layoutMode=DEFAULT_LAYOUT_MODE;
     this.layout=createLayout(model,this.layoutMode);
     this.nodeGeometry=new THREE.BoxGeometry(NODE_SIZE,NODE_SIZE,NODE_SIZE);
     const positions = new Map(),keysById=new Map();
-    const add = (key,id,type,pos,state,error) => {
+    const add = (key,id,type,pos,state,error,displayName=id) => {
       // Lightweight off-scene proxies retain exact per-node picking and positions.
       const mesh = new THREE.Mesh(this.nodeGeometry, new THREE.MeshBasicMaterial({color:error?colors.error:colors[type]}));
       mesh.position.copy(pos); mesh.userData.key = key;mesh.updateMatrixWorld();
-      const title = this.labels.add(id); title.position.copy(pos).add(new THREE.Vector3(0,TITLE_OFFSET,0));
+      const title = this.labels.add(displayName); title.position.copy(pos).add(new THREE.Vector3(0,TITLE_OFFSET,0));
       const count = this.labels.add(type==='Q'?'0 次':'',{color:'#5c7a96',size:17}); count.position.copy(pos).add(new THREE.Vector3(0,COUNT_OFFSET,0));
       title.visible=count.visible=!this.nodeLabelsHidden;
       const q = state ? this.labels.add('q',{color:'#173145',size:30,renderOrder:6}) : null;
@@ -211,7 +211,7 @@ export class NetworkView {
       if(!positions.has(id)){positions.set(id,pos);keysById.set(id,key);}
     };
     const at=key=>{const p=this.layout.positions.get(key);return new THREE.Vector3(p.x,p.y,p.z);};
-    sorted.forEach(n=>add(n.key,n.id,'Q',at(n.key),n.initial!==null,!!n.errors.length));
+    sorted.forEach(n=>add(n.key,n.id,'Q',at(n.key),n.initial!==null,!!n.errors.length,n.displayName??n.id));
     model.inputs.forEach(id=>add(id,id,'X',at(id),false,false));
     model.outputs.forEach(o=>add(o.id,o.id,'Y',at(o.id),false,!!o.error));
     const rawEdges=[];
