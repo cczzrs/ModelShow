@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
-import { readPool as readStoredPool, applyPoolCommand } from './model-pool-service.js';
+import { failure, readPool, applyPoolCommand } from './model-pool-service.js';
 import { createLocalModelPoolStore } from './local-model-pool-store.js';
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -15,10 +15,6 @@ const mimeTypes = {
   '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon',
   '.woff': 'font/woff', '.woff2': 'font/woff2', '.wasm': 'application/wasm',
 };
-
-function failure(status, message) {
-  return Object.assign(new Error(message), { status });
-}
 
 function json(response, status, value, head = false) {
   const content = JSON.stringify(value);
@@ -85,10 +81,6 @@ export function createModelPoolServer(options = {}) {
   const allowedOrigins = new Set((Array.isArray(originOption) ? originOption : originOption.split(',')).map(origin => origin.trim()).filter(Boolean));
   let pendingWrite = Promise.resolve();
 
-  async function readPool() {
-    return readStoredPool(storage);
-  }
-
   function checkOrigin(request, response) {
     const origin = request.headers.origin;
     response.setHeader('Vary', 'Origin');
@@ -142,7 +134,7 @@ export function createModelPoolServer(options = {}) {
         const permanentWritable = hasToken(request, token);
         if (request.method === 'GET') {
           await pendingWrite;
-          const { pool } = await readPool();
+          const { pool } = await readPool(storage);
           json(response, 200, { pool, writable: true, authRequired: Boolean(token), permanentWritable });
         } else if (request.method === 'POST') {
           const command = await readJson(request);
@@ -153,7 +145,7 @@ export function createModelPoolServer(options = {}) {
       } else if (url.pathname === '/example.json') {
         if (!['GET', 'HEAD'].includes(request.method)) throw failure(405, '不支持此请求方法。');
         await pendingWrite;
-        json(response, 200, (await readPool()).pool, request.method === 'HEAD');
+        json(response, 200, (await readPool(storage)).pool, request.method === 'HEAD');
       } else await serveStatic(request, response, url.pathname);
     } catch (error) {
       if (response.destroyed || response.headersSent) return;
