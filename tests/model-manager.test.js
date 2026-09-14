@@ -240,6 +240,7 @@ test('a connected backend failure is surfaced without falling back to the bundle
   h.api(pool(), true);await h.manager.loadInitial();
   h.reject(new Error('backend disconnected'));
   await h.manager.open();
+  assert.equal(h.element('import-error').textContent, '模型池连接失败，仍可导入和下载。');
   assert.equal(h.calls.length, 2);
   assert.equal(h.calls.some(call => call.url === './example.json'), false);
   assert.equal(h.manager.writable, false);

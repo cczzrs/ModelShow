@@ -137,7 +137,7 @@ export class ModelManager {
     const draft=this.editor.value!==this.editorValue?this.editor.value:null;
     const {pool,...connection}=await this.read();Object.assign(this,connection);this.applyPool(pool);
     if(hadPool&&previousId===this.selectedId&&draft!==null){this.editor.value=draft;this.controls();}
-    if(!this.remote&&hadPool)this.error(`后端连接失败：${this.connectionError}。仍可导入和下载模型。`);
+    if(!this.remote&&hadPool)this.error('模型池连接失败，仍可导入和下载。');
     if(hadPool&&previousId!==this.selectedId)this.onLoad(this.entry()?.model??emptyModel());
   }
   async loadInitial() {
