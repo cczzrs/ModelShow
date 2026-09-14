@@ -1,4 +1,4 @@
-import { parseModelPool, mutateModelPool } from '../src/model-pool.js';
+import { parseModelPool, mutateModelPool } from '../src/models/model-pool.js';
 
 export const failure = (status, message) => Object.assign(new Error(message), { status });
 

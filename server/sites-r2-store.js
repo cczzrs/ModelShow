@@ -1,4 +1,4 @@
-import { parseModelPool } from '../src/model-pool.js';
+import { parseModelPool } from '../src/models/model-pool.js';
 import { failure } from './model-pool-service.js';
 
 export const MODEL_POOL_KEY = 'model-pool.json';

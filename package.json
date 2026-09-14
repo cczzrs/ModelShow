@@ -9,7 +9,7 @@
     "start": "node server/model-pool-server.js",
     "build": "node scripts/build.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test tests/*.test.js"
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
     "three": "0.180.0"
