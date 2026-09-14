@@ -24,7 +24,7 @@
 .display-heading h2 { margin:0; font-size:21px; }
 .display-heading .muted { margin:6px 0 0; }
 .display-dialog .muted { color:#8da5bd; font-size:12px; line-height:1.7; }
-.display-body { display:grid; grid-template-columns:320px minmax(0,1fr); gap:18px; align-items:start; }
+.display-body { display:grid; grid-template-columns:minmax(0,1fr) 400px; gap:18px; align-items:start; }
 .display-settings,.display-workspace { display:grid; gap:18px; min-width:0; }
 .display-panel { min-width:0; padding:18px; border:1px solid #2b3f54; border-radius:10px; background:#101e2e; }
 .display-panel h3 { margin:0 0 12px; font-size:15px; color:#e7f0fa; }
