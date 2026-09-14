@@ -13,6 +13,6 @@ export default {
         allowedOrigins: env.MODEL_POOL_ALLOWED_ORIGINS ?? '',
       })(request);
     }
-    return env.ASSETS.fetch(request);
+    return env.ASSETS?.fetch ? env.ASSETS.fetch(request) : new Response('资源不存在。', { status: 404 });
   },
 };

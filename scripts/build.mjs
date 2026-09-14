@@ -3,6 +3,9 @@ import { cp, mkdir, rm } from 'node:fs/promises';
 
 await rm(new URL('../dist/', import.meta.url), { recursive: true, force: true });
 await build();
+// Sites serves matching static assets before the Worker. Keep this compatibility
+// URL dynamic so it cannot mask the latest R2 object with a bundled snapshot.
+await rm(new URL('../dist/client/example.json', import.meta.url), { force: true });
 await build({
   configFile: false, publicDir: false,
   build: {
