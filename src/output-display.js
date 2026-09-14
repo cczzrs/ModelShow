@@ -5,7 +5,7 @@ const integer=(v,min,max,label)=>Number.isInteger(v)&&v>=min&&v<=max?v:fail(`${l
 const choice=(v,values,label)=>values.includes(v)?v:fail(`${label} 无效`);
 export const fixed=value=>({kind:'fixed',value});
 export const emptyPixel=()=>({mode:'channels',channels:{r:fixed(0),g:fixed(0),b:fixed(0)}});
-export function defaultDisplay(rows=4,cols=4){integer(rows,1,32,'行数');integer(cols,1,32,'列数');return {version:1,enabled:false,rows,cols,scale:1,pixels:Array.from({length:rows*cols},emptyPixel)};}
+export function defaultDisplay(rows=3,cols=3){integer(rows,1,32,'行数');integer(cols,1,32,'列数');return {version:1,enabled:false,rows,cols,scale:3,pixels:Array.from({length:rows*cols},emptyPixel)};}
 function bitList(bits,max=64){if(!Array.isArray(bits)||bits.length<1||bits.length>max)fail(`Yi 列表需要 1～${max} 位`);return bits.map(id=>typeof id==='string'&&/^Y(0|[1-9]\d*)$/.test(id)?id:fail(`无效 Yi：${String(id)}`));}
 const order=v=>choice(v,['lsb-first','msb-first'],'位序');
 const mapping=v=>choice(v,['scale','direct'],'亮度换算');
@@ -55,6 +55,17 @@ export function batchDisplay(config,{start,width=8,order:bitOrder='lsb-first',ma
  return validateDisplay(next);
 }
 export function exportDisplayModel(raw,config){return {...structuredClone(raw),outputDisplay:validateDisplay(config)};}
+function sameJSON(a,b){
+ if(a===b)return true;
+ if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+ const keys=Object.keys(a);
+ return keys.length===Object.keys(b).length&&keys.every(key=>Object.hasOwn(b,key)&&sameJSON(a[key],b[key]));
+}
+// Only the actually loaded model owns the live board. An unimported draft
+// must retain its own display settings, even when its name or MD5 matches.
+export function exportCurrentDisplayModel(raw,loadedRaw,config){
+ return sameJSON(raw,loadedRaw)?exportDisplayModel(raw,config):structuredClone(raw);
+}
 export function displayConnections(config){return config.pixels.flatMap((p,index)=>CHANNELS.flatMap(k=>{const c=channelsOf(p)[k];return c.kind==='bits'?[...new Set(c.bits)].map(source=>({source,index,channel:k})):[];}));}
 export class DisplayState {
  constructor(config,outputs=[]){this.configure(config,outputs);}

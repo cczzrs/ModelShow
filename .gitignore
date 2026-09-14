@@ -1,3 +1,9 @@
 node_modules/
 dist/
 .DS_Store
+.sites-runtime/
+artifacts/
+server/.data/
+.env
+.env.*
+!.env.example

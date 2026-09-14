@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#09111e"><title>JK Observatory · 节点网络实验室</title></head>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#09111e"><link rel="icon" href="./favicon.ico"><title>JK Observatory · 节点网络实验室</title></head>
 <body style="background-color: #09111e;">
 <div id="app">
-<header><a class="brand" href="./"><span class="brand-icon">J<span>K</span></span><div>JK OBSERVATORY<small>节点网络 · 交互实验室</small></div></a><div class="header-center"><i class="dot"></i><span id="model-name">加载模型</span><span id="model-md5"></span></div><button id="import-btn" class="button">↥ 导入模型</button><input type="file" id="file" accept=".json,application/json" hidden></header>
+<header><a class="brand" href="./"><span class="brand-icon">J<span>K</span></span><div>JK OBSERVATORY<small>节点网络 · 交互实验室</small></div></a><div class="header-center"><i class="dot"></i><span id="model-name">加载模型</span><span id="model-md5"></span></div><button id="import-btn" class="button">模型管理</button><input type="file" id="file" accept=".json,application/json" hidden></header>
 <div class="workspace">
 <aside class="left-panel">
 <section class="section"><div class="eyebrow">01 / MODEL</div><h2>网络概览</h2><div class="stats"><div><b id="stat-nodes">—</b><span>JK 节点</span></div><div><b id="stat-edges">—</b><span>连接</span></div></div><div class="stats"><div><b id="stat-state">—</b><span>有状态</span></div><div title="所有 JK 节点 EX 中 J/K 操作项的数量，含常量及重复操作；无法解析的 EX 不计入。"><b id="stat-ex">—</b><span>EX 总量</span></div></div><div id="model-errors" class="errors" hidden></div><details><summary style="color: #a0e4d6;">模型元数据</summary><pre id="metadata"></pre></details></section>
@@ -17,7 +17,7 @@
 <button class="layout-button" data-layout="4D" aria-pressed="true" title="输入输出保留 YZ 平面，JK 按 XYZ 拓扑排列，交换 Y/Z 后翻转 Y">4D</button>
 <button class="layout-button" data-layout="5D" aria-pressed="false" title="输入侧与输出侧第一排，其余 JK 球形扩张并缩短引用距离，交换 Y/Z 后翻转 Y">5D</button>
 <button class="layout-button" data-layout="auto" aria-pressed="false" title="比较遮挡、交叉和连线长度，自动选择布局">自动</button>
-</div><span id="layout-status" role="status">4D 拓扑布局</span></div><span class="camera-hint" title="左键拖动：全向旋转；右键、中键或 Shift+左键拖动：平移；滚轮：围绕鼠标位置缩放；左键点击：选择/取消选择">左拖旋转 · 右/中拖平移 · 滚轮指向缩放</span></div><div id="node-picker" aria-label="选择节点"></div><div class="playback"><div class="playback-main"><button id="play" class="button primary">Ⅱ 暂停</button><button id="step" class="button">▷ 单步</button><button id="reset" class="button">↺ 重载</button></div><div class="speed" style="height: 50px;"><label for="speed"><span id="speed-label">动画速度</span> <b id="speed-value">1×</b></label><input id="speed" type="range" min="0.25" max="4" value="1" step="0.25" aria-describedby="speed-budget"><small id="speed-budget" hidden></small></div><label class="skip"><input id="skip" type="checkbox">跳过动画</label><span id="run-status" class="run-status">就绪</span></div></main>
+</div><span id="layout-status" role="status">4D 拓扑布局</span></div><span class="camera-hint" title="左键拖动：全向旋转；右键、中键或 Shift+左键拖动：平移；滚轮：围绕鼠标位置缩放；左键点击：选择/取消选择">左拖旋转 · 右/中拖平移 · 滚轮指向缩放</span></div><div id="node-picker" aria-label="选择节点"></div><div class="playback"><div class="playback-main"><button id="play" class="button primary">Ⅱ 暂停</button><button id="step" class="button">▷ 单步</button><button id="reset" class="button">↺ 重载</button></div><div class="speed" style="height: 50px;"><label for="speed"><span id="speed-label">计算速度</span> <b id="speed-value">1×</b></label><input id="speed" type="range" min="0.25" max="4" value="1" step="0.25" aria-describedby="speed-budget"><small id="speed-budget">每帧预算 4 ms</small></div><label class="skip"><input id="skip" type="checkbox" value="1" checked>跳过动画</label><span id="run-status" class="run-status">就绪</span></div></main>
 <aside class="right-panel"><section class="section inspector"><div class="eyebrow">INSPECTOR</div><h2>节点详情 <span id="selected-id" class="tag">—</span></h2><div id="inspector"><p class="muted">选择节点，查看状态与求值过程。</p></div></section><section class="section queue-section"><div class="eyebrow">EXECUTION QUEUE</div><h2>待执行队列 <span id="queue-count" class="tag">0</span></h2><div class="queue-columns"><span>序号 / 节点</span><span>参数副本</span></div><div id="queue" tabindex="0" aria-label="待执行队列"><div id="queue-spacer"></div><div id="queue-rows"></div><div id="queue-empty">队列为空<br><small>发送输入，开始观察计算</small></div></div></section><section class="section history-section"><div class="history-heading"><div class="eyebrow">ACTIVITY</div><span>累计 <b id="total">0</b> 次执行</span></div><div id="history"></div></section></aside>
 </div>
 <footer>
@@ -29,11 +29,25 @@
   <span>LOCAL WORKSPACE <i class="dot"></i></span>
 </footer>
 </div><dialog id="import-dialog" aria-labelledby="import-title">
-  <div class="import-heading"><h2 id="import-title">导入模型</h2><button id="import-close" class="button small" aria-label="关闭导入窗口">✕</button></div>
-  <button id="import-file" class="button">↥ 选择 JSON 文件</button>
+  <div class="import-heading"><h2 id="import-title">模型管理</h2><button id="import-close" class="button small" aria-label="关闭模型管理窗口">✕</button></div>
+  <div class="model-pool-toolbar">
+    <div><label for="file">导入模型</label><button id="import-file" class="button">↥ 选择 JSON 文件</button></div>
+    <div class="model-pool-picker"><label for="model-pool-select">模型池</label><select id="model-pool-select" disabled><option value="">正在加载模型池…</option></select></div>
+    <button id="model-pool-add" class="button" disabled title="将选中的临时模型移入永久模型组">入池</button>
+    <button id="model-pool-delete" class="button" disabled>删除</button>
+  </div>
+  <p id="model-pool-status" class="muted" role="status">正在连接共享模型池…</p>
   <p class="muted">或直接录入、粘贴完整模型 JSON：</p>
   <label for="model-json">模型 JSON</label>
   <textarea id="model-json" spellcheck="false" placeholder='{"nodes": [...], "initial_q": {"0": [], "1": []}, "q_y": [...]}'></textarea>
   <p id="import-error" class="errors" role="alert" hidden></p>
-  <div class="import-actions"><button id="import-cancel" class="button">取消</button><button id="import-json" class="button primary">导入 JSON</button></div>
+  <div class="import-actions"><button id="model-download" class="button">下载模型</button><button id="import-cancel" class="button">关闭</button><button id="import-json" class="button primary">导入 JSON</button></div>
+</dialog>
+<dialog id="model-auth-dialog" aria-labelledby="model-auth-title">
+  <h2 id="model-auth-title">确认永久模型操作</h2>
+  <p id="model-auth-description" class="muted"></p>
+  <label for="model-auth-password">管理员口令</label>
+  <input id="model-auth-password" type="password" autocomplete="off" placeholder="输入口令以确认本次操作">
+  <p id="model-auth-error" class="errors" role="alert" hidden></p>
+  <div class="import-actions"><button id="model-auth-cancel" class="button">取消</button><button id="model-auth-confirm" class="button primary">确认操作</button></div>
 </dialog><script type="module" src="/src/main.js"></script></body></html>

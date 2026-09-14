@@ -2,15 +2,16 @@ import './style.css';
 import { compileModel, JKEngine } from './engine.js';
 import { Playback } from './playback.js';
 import { FrameUpdates } from './frame-updates.js';
-import { loadDisplay, exportDisplayModel } from './output-display.js';
+import { loadDisplay, exportDisplayModel, exportCurrentDisplayModel } from './output-display.js';
 import { OutputDisplayUI, lampDetails } from './output-display-ui.js';
 import { NetworkView } from './view.js';
 import { ImageInputUI } from './image-input-ui.js';
 import { displayNodeId } from './node-id.js';
 import { setupSceneFullscreen } from './fullscreen.js';
+import { ModelManager } from './model-manager.js';
 const $ = id => document.getElementById(id);
 const el = (tag, text, className) => { const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e; };
-let model,engine,playback,selected,view,importGeneration=0,modelVersion=0;
+let model,engine,playback,selected,view,modelVersion=0;
 const frameUpdates=new FrameUpdates(update,event=>view?.syncOutputs(engine,event));
 const outputElements=new Map(),pickerElements=new Map();
 const displayUI=new OutputDisplayUI(config=>{view?.setOutputDisplay(config);renderInspector();},()=>{
@@ -143,28 +144,7 @@ $('camera-reset').onclick=()=>view?.resetCamera();
 setupSceneFullscreen(document.querySelector('.main-view'),$('scene-fullscreen'),document.querySelector('.inspector'));
 $('node-labels').onclick=()=>{const button=$('node-labels'),hidden=button.getAttribute('aria-pressed')!=='true';button.setAttribute('aria-pressed',String(hidden));button.textContent=hidden?'显示名称和次数':'隐藏名称和次数';view?.setNodeLabelsHidden(hidden);};
 $('black-background').onclick=()=>{const enabled=$('black-background').getAttribute('aria-pressed')!=='true';$('black-background').setAttribute('aria-pressed',String(enabled));view?.setBlackBackground(enabled);};
-function importError(error) {
-  $('import-error').textContent=`导入失败：${error.message}`;
-  $('import-error').hidden=false;
-  message(`导入失败：${error.message}`,true);
-}
-$('import-btn').onclick=()=>{$('import-error').hidden=true;$('import-dialog').showModal();};
-$('import-close').onclick=$('import-cancel').onclick=()=>$('import-dialog').close();
-$('import-file').onclick=()=>$('file').click();
-$('import-json').onclick=()=>{
-  ++importGeneration;
-  try { install(JSON.parse($('model-json').value)); $('import-dialog').close(); }
-  catch(e) { importError(e); }
-};
-$('file').onchange=async()=>{
-  const file=$('file').files[0];if(!file)return;
-  const generation=++importGeneration;
-  try {
-    const text=await file.text();
-    if(generation===importGeneration){install(JSON.parse(text));$('import-dialog').close();}
-  } catch(e) { if(generation===importGeneration)importError(e); }
-  finally { $('file').value=''; }
-};
+const modelManager=new ModelManager(install,message,raw=>exportCurrentDisplayModel(raw,model?.raw,displayUI.config));
 function pauseAfterError(error,prefix){
   let detail='';
   try { playback?.pause(); }
@@ -191,7 +171,7 @@ $('gpu-retry').onclick=async()=>{
 };
 async function start(){
   view=new NetworkView($('viewport'),select,renderingFailed,layoutStatus);
-  const response=await fetch('./example.json');if(!response.ok)throw new Error('无法加载示例模型');install(await response.json());
+  await modelManager.loadInitial();
   frameUpdates.flush();
   let previous=performance.now(),lastStatus='';
   function frame(now){

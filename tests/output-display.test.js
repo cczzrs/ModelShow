@@ -79,7 +79,7 @@ test('white border and selected-lamp outline have real holes, while thin rims re
  const board=new OutputBoard(new THREE.Scene()),c=defaultDisplay(1,1);c.enabled=true;board.rebuild(c,visuals(),{bounds:bound});board.select('lamp:0');board.group.updateMatrixWorld(true);
  const origin=board.positions[0].clone().add(new THREE.Vector3(2,0,0)),ray=new THREE.Raycaster(origin,new THREE.Vector3(-1,0,0));
  assert.equal(ray.intersectObject(board.border,true).length,0);assert.equal(ray.intersectObject(board.marker).length,0);assert.ok(ray.intersectObject(board.lamps).length>0);
- origin.z+=(.45+.04)/2-.012/2;ray.set(origin,new THREE.Vector3(-1,0,0));assert.ok(ray.intersectObject(board.border,true).length>0);
+ origin.z+=((.45+.04)/2-.012/2)*c.scale;ray.set(origin,new THREE.Vector3(-1,0,0));assert.ok(ray.intersectObject(board.border,true).length>0);
  const normals=board.lamps.geometry.attributes.normal;for(let i=0;i<normals.count;i++)assert.ok(normals.getX(i)>.999);board.clear();
 });
 test('backside ports deduplicate per lamp/channel and floating links never cross the screen',()=>{

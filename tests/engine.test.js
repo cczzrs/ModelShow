@@ -1,3 +1,4 @@
+import {parseModelPool,defaultPoolEntry} from '../src/model-pool.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -5,7 +6,7 @@ import { parseExpression, compileModel, JKEngine } from '../src/engine.js';
 import { Playback } from '../src/playback.js';
 const make=(nodes,initial={'0':[],'1':[]},outputs=[])=>new JKEngine(compileModel({nodes:nodes.map(([id,ex])=>({id,ex})),initial_q:initial,q_y:outputs}));
 const drain=e=>{const trace=[];while(e.length){assert.ok(trace.length<200,'unexpected nontermination');trace.push(e.step());}return trace;};
-const example=()=>new JKEngine(compileModel(JSON.parse(readFileSync(new URL('../public/example.json',import.meta.url),'utf8'))));
+const example=()=>new JKEngine(compileModel(defaultPoolEntry(parseModelPool(JSON.parse(readFileSync(new URL('../public/example.json',import.meta.url),'utf8')))).model));
 test('parser consumes full expressions; rejects nested, empty and trailing invalid text',()=>{
  assert.equal(parseExpression(' J0 K1 J( X0 ) ').length,3);
  for(const ex of ['', 'J0x', 'J0J(J(X0))','J0K(X01)','J0;alert(1)','J0K2',null])assert.throws(()=>parseExpression(ex));
