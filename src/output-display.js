@@ -55,6 +55,17 @@ export function batchDisplay(config,{start,width=8,order:bitOrder='lsb-first',ma
  return validateDisplay(next);
 }
 export function exportDisplayModel(raw,config){return {...structuredClone(raw),outputDisplay:validateDisplay(config)};}
+function sameJSON(a,b){
+ if(a===b)return true;
+ if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+ const keys=Object.keys(a);
+ return keys.length===Object.keys(b).length&&keys.every(key=>Object.hasOwn(b,key)&&sameJSON(a[key],b[key]));
+}
+// Only the actually loaded model owns the live board. An unimported draft
+// must retain its own display settings, even when its name or MD5 matches.
+export function exportCurrentDisplayModel(raw,loadedRaw,config){
+ return sameJSON(raw,loadedRaw)?exportDisplayModel(raw,config):structuredClone(raw);
+}
 export function displayConnections(config){return config.pixels.flatMap((p,index)=>CHANNELS.flatMap(k=>{const c=channelsOf(p)[k];return c.kind==='bits'?[...new Set(c.bits)].map(source=>({source,index,channel:k})):[];}));}
 export class DisplayState {
  constructor(config,outputs=[]){this.configure(config,outputs);}

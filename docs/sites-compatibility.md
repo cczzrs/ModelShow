@@ -1,3 +1,5 @@
+> 当前实现已升级为 Sites Worker + 项目 R2 绑定，模型池存储于 `model-pool.json`。部署方式以 README 的“Sites 后端与 R2 模型池”为准。以下保留首次静态预览的历史记录，不作为当前部署说明。
+
 # ModelShow → Sites 兼容性检查与未发布预览
 
 检查日期：2026-09-12（UTC）。对象为当前 ModelShow 项目，沿用 Vite 7.1.5、Three.js 0.180.0 和 pnpm 锁文件。

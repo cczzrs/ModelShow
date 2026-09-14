@@ -7,8 +7,9 @@
 /* Growing operation details must not overlap the queue beneath them. */
 .inspector{flex-shrink:0}#model-errors{white-space:pre-line}
 .header-center{max-width:none;min-width:0;flex:1;flex-wrap:wrap;column-gap:10px;row-gap:5px;white-space:normal;overflow:visible;justify-content:center}#model-name{overflow-wrap:anywhere}#model-md5{font:11px ui-monospace,monospace;color:#7e94ad;overflow-wrap:anywhere;user-select:text}
-#import-dialog{width:min(680px,calc(100vw - 32px));max-height:90dvh;padding:24px;border:1px solid #38516b;border-radius:12px;background:#0d1929;color:#dbe5ef;box-shadow:0 25px 100px #0009}#import-dialog::backdrop{background:#030a13b3;backdrop-filter:blur(3px)}.import-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.import-heading h2{margin:0}#import-dialog label{display:block;margin-bottom:8px;color:#9eb0c5}#model-json{height:280px;min-height:140px}.import-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}#import-error{white-space:pre-wrap;overflow-wrap:anywhere}
+#import-dialog{width:min(680px,calc(100vw - 32px));max-height:90dvh;padding:24px;border:1px solid #38516b;border-radius:12px;background:#0d1929;color:#dbe5ef;box-shadow:0 25px 100px #0009}#import-dialog::backdrop{background:#030a13b3;backdrop-filter:blur(3px)}.import-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.import-heading h2{margin:0}#import-dialog label{display:block;margin-bottom:8px;color:#9eb0c5}#model-json{height:280px;min-height:140px}.import-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}#model-download{margin-right:auto}#import-error{white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:850px){header{height:auto;min-height:90px;flex-wrap:wrap;padding-top:12px;padding-bottom:12px;gap:12px}.header-center{display:flex;order:3;flex-basis:100%;justify-content:flex-start}#model-md5{font-size:10px}}
+.model-pool-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:14px}.model-pool-picker{flex:1;min-width:180px}.model-pool-picker select{width:100%;min-width:0}.model-pool-picker select,#model-auth-password{padding:9px 10px;border:1px solid #354b62;border-radius:6px;background:#142336;color:#deecf7}#model-pool-status{font-size:11px;line-height:1.7}#model-pool-delete{color:#ffadb7}#model-auth-dialog{width:min(420px,calc(100vw - 32px));padding:24px;border:1px solid #38516b;border-radius:12px;background:#0d1929;color:#dbe5ef;box-shadow:0 25px 100px #0009}#model-auth-dialog::backdrop{background:#030a1380}#model-auth-dialog label{display:block;margin-bottom:8px;color:#9eb0c5}#model-auth-password{width:100%}#model-auth-description,#model-auth-error{white-space:pre-wrap;overflow-wrap:anywhere}
 .scene-toolbar{gap:12px}.scene-toolbar>div:first-child{flex-shrink:0}.scene-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;pointer-events:auto}.main-view.black-background{background:#000}#black-background[aria-pressed=true]{border-color:#83dfc7;color:#83dfc7;background:#101d21}
 .scene-fullscreen-open,.scene-fullscreen-open body{overflow:hidden}.main-view.scene-fullscreen{position:fixed;inset:0;z-index:100;width:100%;height:100dvh;min-width:0;min-height:0}.scene-fullscreen #viewport{min-height:0}.scene-fullscreen .scene-bottom{flex-shrink:0}.scene-fullscreen #node-picker,.scene-fullscreen .playback{display:none}#scene-fullscreen[aria-pressed=true]{border-color:#83dfc7;color:#83dfc7}
 .scene-fullscreen>.inspector{display:none;position:absolute;top:80px;right:20px;width:300px;max-width:calc(100% - 40px);min-height:0;max-height:calc(100% - 144px);overflow:auto;overscroll-behavior:contain;z-index:3;background:#0d1624f5;border:1px solid #2b3b50;border-radius:8px;scrollbar-width:thin}.scene-fullscreen>.inspector.has-selection{display:block}@media(max-width:560px){.scene-fullscreen>.inspector{top:124px;max-height:calc(100% - 188px)}}
@@ -45,11 +46,15 @@
 .speed { width:112px; flex-shrink:0; }
 #speed-budget { color:#8aa9b7; font-size:9px; white-space:nowrap; }
 #image-input { margin-bottom:12px; width:100%; text-align:left; color:#a0e4d6; }
-.image-input-dialog { width:min(1120px,96vw); max-height:94dvh; overflow:auto; padding:24px; border:1px solid #344a60; border-radius:12px; background:#0e1928; color:#dce8f4; }
+.image-input-dialog { width:min(1120px,96vw); max-height:94dvh; overflow:auto; padding:15px 24px; border:1px solid #344a60; border-radius:12px; background:#0e1928; color:#dce8f4; }
 .image-input-dialog::backdrop { background:#020811cc; backdrop-filter:blur(3px); }
 .image-input-heading,.image-input-import,.image-input-tools,.image-input-footer { display:flex; align-items:center; gap:12px; }
 .image-input-heading { justify-content:space-between; margin-bottom: 10px;}
 .image-input-heading h2 { margin:7px 0 0; font-size:19px; }
+.image-input-presets { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px; color:#a9bdd2; font-size:11px; }
+.image-input-presets button { display:flex; align-items:center; gap:8px; padding:5px 10px; }
+.image-input-presets img { width:46px; height:28px; object-fit:cover; border-radius:3px; }
+.image-input-presets button[aria-pressed=true] { border-color:#83dfc7; color:#83dfc7; background:#152d32; }
 .image-input-import { margin:20px 0 16px; min-width:0; }
 .image-input-import span { color:#91a7be; font-size:12px; overflow-wrap:anywhere; }
 .image-input-fields { display:flex; flex-wrap:wrap; gap:12px; padding:14px; background:#0a1421; border:1px solid #26374c; border-radius:8px; }
@@ -58,7 +63,7 @@
 .image-input-fields input,.image-input-fields select { color:#deecf7; background:#142336; border:1px solid #354b62; border-radius:5px; padding:8px; height:34px; }
 .image-input-fields input { width:108px; }
 .image-input-dialog button:disabled,.image-input-fields :disabled { opacity:.45; cursor:not-allowed; }
-.image-input-body { display:grid; grid-template-columns:minmax(0,1fr) 295px; gap:20px; margin-top:18px; }
+.image-input-body { display:grid; grid-template-columns:minmax(0,1fr) 295px; gap:20px; margin-top:8px; }
 .image-input-workspace,.image-input-results { min-width:0; }
 .image-input-tools { margin-bottom:10px; }
 .image-input-tools span { margin-left:auto; font:12px ui-monospace,monospace; color:#91b8c6; }

@@ -33,10 +33,17 @@ function canvas(){
 }
 
 function harness(t){
-  const saved=new Map(['document','ImageData','createImageBitmap'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  const saved=new Map(['document','window','ImageData','createImageBitmap','fetch'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   t.after(()=>{for(const [key,descriptor]of saved)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];});
-  const pending=[];
+  const pending=[],requests=[],imports=[];
+  globalThis.window={devicePixelRatio:1};
   globalThis.document={createElement(tag){assert.equal(tag,'canvas');return canvas();}};
+  globalThis.fetch=(url,{signal})=>{
+    const response=deferred(),request={url,signal,ignoreAbort:false,respond(status=200){response.resolve({ok:status>=200&&status<300,status,blob:async()=>new Blob([png],{type:'image/png'})});}};
+    const abort=()=>{if(!request.ignoreAbort)response.reject(new DOMException('Request cancelled','AbortError'));};
+    signal.addEventListener('abort',abort,{once:true});requests.push(request);
+    return response.promise.finally(()=>signal.removeEventListener('abort',abort));
+  };
   globalThis.ImageData=class{constructor(data,width,height){Object.assign(this,{data,width,height});}};
   globalThis.createImageBitmap=()=>{const job=pending.shift();assert.ok(job,'each decode must belong to a started import');job.started.resolve();return job.decoded.promise;};
   const ui=Object.create(ImageInputUI.prototype),fields=new Map(),infos=new Map(),actions=new Map(),empty=element(),screen=canvas();
@@ -44,13 +51,19 @@ function harness(t){
   Object.assign(ui,{
     config:{...defaultImageInputConfig(),encoding:'gray'},selection:{x:0,y:0,width:1,height:1},inputIds:ids(),modelVersion:1,generation:0,
     view:{scale:1,x:0,y:0,width:400,height:300},field:lookup(fields),info:lookup(infos),action:lookup(actions),canvas:screen,context:screen.getContext('2d'),
-    preview:canvas(),jsonPreview:element(),stage:{querySelector:()=>empty},dialog:{open:true,close(){this.open=false;}},
+    preview:canvas(),jsonPreview:element(),stage:{querySelector:()=>empty},dialog:{open:true,close(){this.open=false;},showModal(){this.open=true;}},
+    fileInput:{clicks:0,click(){this.clicks++;}},
+    presetButtons:['b1.png','b2.png'].map(name=>({dataset:{preset:name},attributes:{},setAttribute(key,value){this.attributes[key]=value;}})),
     onApply(){},onApplied(){},
   });
-  return {ui,async start(name){
+  ui.loadFile=(...args)=>{const done=ImageInputUI.prototype.loadFile.call(ui,...args);imports.push(done);return done;};
+  const prepareDecode=()=>{
     const job={started:deferred(),decoded:deferred()};pending.push(job);
-    const done=ui.loadFile(Object.assign(new Blob([png]),{name}));await job.started.promise;
-    return {done,finish:job.decoded.resolve,fail:job.decoded.reject};
+    return {started:job.started.promise,finish:job.decoded.resolve,fail:job.decoded.reject};
+  };
+  return {ui,requests,imports,prepareDecode,async start(name){
+    const job=prepareDecode(),done=ui.loadFile(Object.assign(new Blob([png]),{name}));await job.started;
+    return {...job,done};
   }};
 }
 
@@ -58,6 +71,77 @@ async function loaded(t,values){
   const h=harness(t),job=await h.start('original.png'),image=bitmap(values);job.finish(image);await job.done;
   assert.equal(image.closed,1);assert.equal(h.ui.action('apply').disabled,false);return h;
 }
+
+async function loadPreset(h,name='b1.png',values){
+  const job=h.prepareDecode(),done=h.ui.loadBuiltin(name);
+  h.requests.at(-1).respond();await job.started;
+  const image=bitmap(values);job.finish(image);await done;
+  assert.equal(image.closed,1);assert.equal(h.ui.sourcePreset,name);
+}
+
+test('first open loads b1 without a local chooser, and reopening restores the selected preset and crop',async t=>{
+  const h=harness(t),ui=h.ui,job=h.prepareDecode();ui.dialog.open=false;
+  ui.open();ui.open();
+  assert.equal(ui.dialog.open,true);assert.equal(ui.fileInput.clicks,0);assert.equal(h.requests.length,1);
+  assert.match(h.requests[0].url,/\/img\/b1\.png$/);assert.equal(ui.loading,true);
+  h.requests[0].respond();await job.started;
+  const image=bitmap();job.finish(image);await h.imports[0];
+  assert.equal(image.closed,1);assert.equal(ui.sourceName,'b1.png');assert.equal(ui.sourcePreset,'b1.png');
+  assert.deepEqual(ui.presetButtons.map(button=>button.attributes['aria-pressed']),['true','false']);
+  ui.selection={x:1,y:1,width:1,height:1};ui.refresh();
+  const source=ui.source,json=ui.result.json,selection={...ui.selection};
+  ui.close();ui.open();
+  assert.equal(h.requests.length,1);assert.equal(ui.fileInput.clicks,0);assert.equal(ui.source,source);
+  assert.deepEqual(ui.selection,selection);assert.equal(ui.result.json,json);
+});
+
+test('a newer local image wins over an older preset fetch even if that fetch ignores abort',async t=>{
+  const h=await loaded(t),ui=h.ui,oldSource=ui.source,preset=ui.loadBuiltin('b1.png'),request=h.requests.at(-1);
+  request.ignoreAbort=true;
+  const local=await h.start('new-local.png');assert.equal(request.signal.aborted,true);
+  const image=bitmap([85,85,85,85]);local.finish(image);await local.done;
+  const source=ui.source,json=ui.result.json;
+  request.respond();await preset;
+  assert.equal(oldSource.width,0);assert.equal(image.closed,1);assert.equal(ui.source,source);
+  assert.equal(ui.sourceName,'new-local.png');assert.equal(ui.sourcePreset,null);assert.equal(ui.result.json,json);
+  assert.deepEqual(ui.presetButtons.map(button=>button.attributes['aria-pressed']),['false','false']);
+  assert.equal(ui.loading,false);assert.equal(ui.info('error').hidden,true);
+});
+
+test('a newer preset fetch and decode wins over an older local decode and releases both bitmaps',async t=>{
+  const h=await loaded(t),ui=h.ui,local=await h.start('old-local.png');
+  await loadPreset(h,'b2.png',[165,165,165,165]);
+  const source=ui.source,json=ui.result.json,lateImage=bitmap([255,255,255,255]);
+  local.finish(lateImage);await local.done;
+  assert.equal(lateImage.closed,1);assert.equal(ui.source,source);assert.equal(ui.result.json,json);
+  assert.equal(ui.sourceName,'b2.png');assert.equal(ui.sourcePreset,'b2.png');
+  assert.deepEqual(ui.presetButtons.map(button=>button.attributes['aria-pressed']),['false','true']);
+  assert.equal(ui.loading,false);assert.equal(ui.action('apply').disabled,false);
+});
+
+test('closing aborts a preset fetch and reopening preserves the previous valid image and selection',async t=>{
+  const h=harness(t),ui=h.ui;await loadPreset(h);
+  ui.selection={x:1,y:1,width:1,height:1};ui.refresh();
+  const source=ui.source,json=ui.result.json,selection={...ui.selection};
+  const done=ui.loadBuiltin('b2.png'),request=h.requests.at(-1);
+  ui.close();assert.equal(request.signal.aborted,true);assert.equal(ui.loading,false);
+  ui.open();await done;
+  assert.equal(h.requests.length,2);assert.equal(ui.source,source);assert.equal(ui.sourcePreset,'b1.png');
+  assert.deepEqual(ui.selection,selection);assert.equal(ui.result.json,json);assert.equal(ui.info('error').hidden,true);
+  assert.equal(ui.action('apply').disabled,false);assert.equal(ui.importAbort,null);
+});
+
+test('a failed preset HTTP request preserves the previous image, preset marker, crop and usable JSON',async t=>{
+  const h=harness(t),ui=h.ui;await loadPreset(h);
+  ui.selection={x:1,y:1,width:1,height:1};ui.refresh();
+  const source=ui.source,json=ui.result.json,selection={...ui.selection};
+  const failed=ui.loadBuiltin('b2.png');h.requests.at(-1).respond(503);await failed;
+  assert.equal(ui.source,source);assert.equal(source.width,2);assert.equal(ui.sourceName,'b1.png');
+  assert.equal(ui.sourcePreset,'b1.png');assert.deepEqual(ui.selection,selection);assert.equal(ui.result.json,json);
+  assert.deepEqual(ui.presetButtons.map(button=>button.attributes['aria-pressed']),['true','false']);
+  assert.match(ui.info('error').textContent,/b2\.png.*HTTP 503/);assert.equal(ui.info('error').hidden,false);
+  assert.equal(ui.action('apply').disabled,false);assert.equal(ui.loading,false);assert.equal(ui.importAbort,null);
+});
 
 test('a newer image wins even when an older import finishes last, and all bitmaps are released',async t=>{
   const h=await loaded(t),oldCanvas=h.ui.source,first=await h.start('first.png'),second=await h.start('second.png');

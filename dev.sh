@@ -11,8 +11,10 @@ else
 fi
 case "${1:-dev}" in
   test) exec "$JK_NODE" --test tests/*.test.js ;;
-  build) exec "$JK_NODE" node_modules/vite/bin/vite.js build ;;
+  build) exec "$JK_NODE" scripts/build.mjs ;;
   preview) exec "$JK_NODE" node_modules/vite/bin/vite.js preview --host 127.0.0.1 ;;
+  api) PORT="${PORT:-5174}" exec "$JK_NODE" server/model-pool-server.js ;;
+  serve) exec "$JK_NODE" server/model-pool-server.js ;;
   dev) exec "$JK_NODE" node_modules/vite/bin/vite.js --host 127.0.0.1 ;;
-  *) echo '用法：./dev.sh [dev|test|build|preview]' >&2; exit 1 ;;
+  *) echo '用法：./dev.sh [dev|api|serve|test|build|preview]' >&2; exit 1 ;;
 esac

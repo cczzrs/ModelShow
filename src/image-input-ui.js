@@ -1,6 +1,11 @@
 import { IMAGE_INPUT_LIMITS, defaultImageInputConfig, clampSelection, selectionBitCount, extractPixelData, mapPixelData } from './image-input.js';
 import { decodeInputImage } from './image-input-loader.js';
 
+const baseImages = [
+  { name: 'b1.png', url: new URL('../img/b1.png', import.meta.url).href },
+  { name: 'b2.png', url: new URL('../img/b2.png', import.meta.url).href },
+];
+
 // The source canvas always stays at decoded resolution; the viewport is display-only.
 export class ImageInputUI {
   constructor(onApply, onApplied = () => {}) {
@@ -23,6 +28,10 @@ export class ImageInputUI {
         <button class="button" data-action="close">关闭</button>
       </div>
       <input type="file" accept=".png,.apng,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" hidden>
+      <div class="image-input-presets" role="group" aria-label="基础图像">
+        <span>基础图像</span>
+        ${baseImages.map(image => `<button class="button" data-preset="${image.name}" aria-pressed="false"><img src="${image.url}" alt="" loading="lazy"><span>${image.name}</span></button>`).join('')}
+      </div>
       <div class="image-input-fields">
         <label>选框宽（原图像素）<input name="width" type="number" min="1" step="1" value="3"></label>
         <label>选框高（原图像素）<input name="height" type="number" min="1" step="1" value="3"></label>
@@ -38,7 +47,7 @@ export class ImageInputUI {
           <div class="image-input-tools"><button class="button small" data-action="fit">适应窗口</button><button class="button small" data-action="original">原始比例</button>
           <p class="image-input-help">左键拖动选框 · 空格＋拖动 / 中键平移 · 滚轮围绕鼠标缩放</p>
           <span data-info="zoom">100%</span></div>
-          <div class="image-input-stage" style="height: 390px;"><canvas tabindex="0" aria-label="图片选区"></canvas><span class="image-input-empty">选择一张本地图片开始提取</span></div>
+          <div class="image-input-stage" style="height: 390px;"><canvas tabindex="0" aria-label="图片选区"></canvas><span class="image-input-empty">选择基础图像或本地图片开始提取</span></div>
         </div>
         <div class="image-input-results">
           <label>提取像素预览
@@ -64,6 +73,8 @@ export class ImageInputUI {
     this.dialog.addEventListener('cancel', event => { event.preventDefault(); this.close(); });
     this.dialog.addEventListener('close', () => { if (!this.dialog.open) this.cancelPending(); });
     this.action('choose').onclick = () => this.fileInput.click();
+    this.presetButtons = [...this.dialog.querySelectorAll('[data-preset]')];
+    for (const button of this.presetButtons) button.onclick = () => this.loadBuiltin(button.dataset.preset);
     this.fileInput.onchange = () => {
       const file = this.fileInput.files[0];
       this.fileInput.value = '';
@@ -120,12 +131,14 @@ export class ImageInputUI {
     if (!this.dialog.open) this.dialog.showModal();
     this.resize();
     this.refresh();
-    if (!this.source) this.fileInput.click();
+    if (!this.source && !this.loading) this.loadBuiltin(baseImages[0].name);
   }
 
   clearSpace() { this.space = false; this.canvas.classList.remove('pan-ready'); }
   cancelPending() {
     ++this.generation;
+    this.importAbort?.abort();
+    this.importAbort = null;
     this.loading = false;
     if (this.drag && this.canvas.hasPointerCapture(this.drag.pointerId)) this.canvas.releasePointerCapture(this.drag.pointerId);
     this.drag = null;
@@ -134,14 +147,30 @@ export class ImageInputUI {
   }
   close() { this.cancelPending(); this.dialog.close(); }
 
-  async loadFile(file) {
+  loadBuiltin(name) {
+    const image = baseImages.find(image => image.name === name);
+    if (!image) return;
+    return this.loadFile(async signal => {
+      const response = await fetch(image.url, { signal });
+      if (!response.ok) throw new Error(`无法加载 ${image.name}（HTTP ${response.status}）`);
+      const blob = await response.blob();
+      return new File([blob], image.name, { type: 'image/png' });
+    }, image.name);
+  }
+
+  async loadFile(file, presetName = null) {
     const generation = ++this.generation;
+    this.importAbort?.abort();
+    const abort = this.importAbort = new AbortController();
     this.loading = true;
     this.error('');
     this.updateFileInfo();
     this.refresh();
     let decoded, candidate;
     try {
+      // Fetch and decode share one generation, so a late preset cannot replace a newer local image.
+      if (typeof file === 'function') file = await file(abort.signal);
+      if (generation !== this.generation || !this.dialog.open) return;
       decoded = await decodeInputImage(file);
       if (generation !== this.generation || !this.dialog.open) return;
       candidate = document.createElement('canvas');
@@ -157,6 +186,7 @@ export class ImageInputUI {
       this.source = candidate;
       this.sourceContext = context;
       this.sourceName = decoded.name;
+      this.sourcePreset = presetName;
       candidate = null;
       this.selection = selection;
       this.fit();
@@ -166,6 +196,7 @@ export class ImageInputUI {
       decoded?.bitmap.close();
       if (candidate) candidate.width = candidate.height = 0;
       if (generation === this.generation) {
+        this.importAbort = null;
         this.loading = false;
         this.updateFileInfo(); this.syncSelection(); this.refresh(); this.draw();
       }
@@ -173,6 +204,7 @@ export class ImageInputUI {
   }
 
   updateFileInfo() {
+    for (const button of this.presetButtons ?? []) button.setAttribute('aria-pressed', String(button.dataset.preset === this.sourcePreset));
     this.action('choose').textContent = this.source ? '更换图片' : '选择图片';
     this.info('file').textContent = this.loading ? '正在解码图片…' : this.source
       ? `${this.sourceName} · ${this.source.width} × ${this.source.height} 像素`

@@ -3,7 +3,7 @@
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#09111e"><link rel="icon" href="./favicon.ico"><title>JK Observatory · 节点网络实验室</title></head>
 <body style="background-color: #09111e;">
 <div id="app">
-<header><a class="brand" href="./"><span class="brand-icon">J<span>K</span></span><div>JK OBSERVATORY<small>节点网络 · 交互实验室</small></div></a><div class="header-center"><i class="dot"></i><span id="model-name">加载模型</span><span id="model-md5"></span></div><button id="import-btn" class="button">↥ 导入模型</button><input type="file" id="file" accept=".json,application/json" hidden></header>
+<header><a class="brand" href="./"><span class="brand-icon">J<span>K</span></span><div>JK OBSERVATORY<small>节点网络 · 交互实验室</small></div></a><div class="header-center"><i class="dot"></i><span id="model-name">加载模型</span><span id="model-md5"></span></div><button id="import-btn" class="button">模型管理</button><input type="file" id="file" accept=".json,application/json" hidden></header>
 <div class="workspace">
 <aside class="left-panel">
 <section class="section"><div class="eyebrow">01 / MODEL</div><h2>网络概览</h2><div class="stats"><div><b id="stat-nodes">—</b><span>JK 节点</span></div><div><b id="stat-edges">—</b><span>连接</span></div></div><div class="stats"><div><b id="stat-state">—</b><span>有状态</span></div><div title="所有 JK 节点 EX 中 J/K 操作项的数量，含常量及重复操作；无法解析的 EX 不计入。"><b id="stat-ex">—</b><span>EX 总量</span></div></div><div id="model-errors" class="errors" hidden></div><details><summary style="color: #a0e4d6;">模型元数据</summary><pre id="metadata"></pre></details></section>
@@ -29,11 +29,25 @@
   <span>LOCAL WORKSPACE <i class="dot"></i></span>
 </footer>
 </div><dialog id="import-dialog" aria-labelledby="import-title">
-  <div class="import-heading"><h2 id="import-title">导入模型</h2><button id="import-close" class="button small" aria-label="关闭导入窗口">✕</button></div>
-  <button id="import-file" class="button">↥ 选择 JSON 文件</button>
+  <div class="import-heading"><h2 id="import-title">模型管理</h2><button id="import-close" class="button small" aria-label="关闭模型管理窗口">✕</button></div>
+  <div class="model-pool-toolbar">
+    <div><label for="file">导入模型</label><button id="import-file" class="button">↥ 选择 JSON 文件</button></div>
+    <div class="model-pool-picker"><label for="model-pool-select">模型池</label><select id="model-pool-select" disabled><option value="">正在加载模型池…</option></select></div>
+    <button id="model-pool-add" class="button" disabled title="将选中的临时模型移入永久模型组">入池</button>
+    <button id="model-pool-delete" class="button" disabled>删除</button>
+  </div>
+  <p id="model-pool-status" class="muted" role="status">正在连接共享模型池…</p>
   <p class="muted">或直接录入、粘贴完整模型 JSON：</p>
   <label for="model-json">模型 JSON</label>
   <textarea id="model-json" spellcheck="false" placeholder='{"nodes": [...], "initial_q": {"0": [], "1": []}, "q_y": [...]}'></textarea>
   <p id="import-error" class="errors" role="alert" hidden></p>
-  <div class="import-actions"><button id="import-cancel" class="button">取消</button><button id="import-json" class="button primary">导入 JSON</button></div>
+  <div class="import-actions"><button id="model-download" class="button">下载模型</button><button id="import-cancel" class="button">关闭</button><button id="import-json" class="button primary">导入 JSON</button></div>
+</dialog>
+<dialog id="model-auth-dialog" aria-labelledby="model-auth-title">
+  <h2 id="model-auth-title">确认永久模型操作</h2>
+  <p id="model-auth-description" class="muted"></p>
+  <label for="model-auth-password">管理员口令</label>
+  <input id="model-auth-password" type="password" autocomplete="off" placeholder="输入口令以确认本次操作">
+  <p id="model-auth-error" class="errors" role="alert" hidden></p>
+  <div class="import-actions"><button id="model-auth-cancel" class="button">取消</button><button id="model-auth-confirm" class="button primary">确认操作</button></div>
 </dialog><script type="module" src="/src/main.js"></script></body></html>
