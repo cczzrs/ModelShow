@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OutputDisplayUI } from '../../src/output/output-display-ui.js';
-import { APP_CONFIG } from '../../src/config.js';
-import { defaultDisplay, convertPixel } from '../../src/output/output-display.js';
+import { OutputDisplayUI } from '../../src/ui/output-display-ui.js';
+import { APP_CONFIG } from '../../html/config.js';
+import { defaultDisplay, convertPixel } from '../../src/ui/output-display.js';
 
 // Replace only the native DOM boundary. The real controller initializes the
-// static fixture, delegates events, validates drafts, applies and exports.
+// static fixture, delegates events, validates drafts and applies changes.
 class Element {
   constructor(tag = 'div', attributes = {}) {
     this.tag = tag;
@@ -131,11 +131,10 @@ function fixture() {
   for (const name of ['start', 'order', 'mapping', 'mode', 'packed-order', 'packed-mapping']) {
     append(root, 'select', { 'data-display-field': name });
   }
-  append(root, 'textarea', { 'data-display-field': 'export-text' });
-  for (const name of ['error', 'required', 'preview-size', 'preview', 'editor', 'editor-title', 'readout', 'export-panel']) {
+  for (const name of ['error', 'required', 'preview-size', 'preview', 'editor', 'editor-title', 'readout']) {
     append(root, 'div', { 'data-display-info': name });
   }
-  for (const name of ['close', 'resize', 'batch', 'convert', 'apply-lamp', 'export']) {
+  for (const name of ['close', 'resize', 'batch', 'convert', 'apply-lamp']) {
     append(root, 'button', { 'data-display-action': name });
   }
   const channels = append(root, 'div', { 'data-display-region': 'channels' });
@@ -174,7 +173,7 @@ function harness(config = defaultDisplay(1, 2)) {
   const root = fixture();
   const applied = [];
   const outputs = Array.from({ length: 24 }, (value, index) => ({ id: `Y${index}` }));
-  const ui = new OutputDisplayUI(root, value => applied.push(structuredClone(value)), () => JSON.stringify({ outputDisplay: ui.config }));
+  const ui = new OutputDisplayUI(root, value => applied.push(structuredClone(value)));
   ui.load(config, outputs);
   return {
     ui,
@@ -217,18 +216,33 @@ test('static controls initialize from frozen defaults and reopening keeps the dr
   assert.equal(APP_CONFIG.outputBoard.channel.value, 0);
 });
 
-test('export uses applied values and invalid brightness cannot replace a valid lamp or clear its draft', () => {
+test('unapplied and invalid brightness cannot replace an applied lamp or clear its draft', () => {
   const h = harness();
   h.ui.channelControls.get('r').value.value = '51';
   h.action('apply-lamp');
+  h.ui.channelControls.get('r').value.value = '87';
+  assert.equal(h.applied[0].pixels[0].channels.r.value, 51);
+  assert.equal(h.ui.config.pixels[0].channels.r.value, 51);
+  assert.equal(h.ui.channelControls.get('r').value.value, '87');
   h.ui.channelControls.get('r').value.value = '999';
-  h.action('export');
-  assert.equal(JSON.parse(h.ui.exportText.value).outputDisplay.pixels[0].channels.r.value, 51);
   h.action('apply-lamp');
   assert.equal(h.applied.length, 1);
   assert.equal(h.ui.config.pixels[0].channels.r.value, 51);
   assert.equal(h.ui.channelControls.get('r').value.value, '999');
   assert.match(h.ui.error.textContent, /0～255/);
+});
+
+test('loading a snapshot board replaces previous drafts without applying another user change', () => {
+  const h = harness();
+  h.ui.channelControls.get('r').value.value = '51';
+  h.action('apply-lamp');
+  h.ui.channelControls.get('r').value.value = '87';
+  const board = defaultDisplay(1, 1);
+  board.pixels[0].channels.r.value = 102;
+  h.ui.load(board, h.ui.outputs);
+  assert.equal(h.ui.channelControls.get('r').value.value, '102');
+  assert.deepEqual(h.ui.config, board);
+  assert.equal(h.applied.length, 1, 'restoring a board is not a new user apply action');
 });
 
 test('lossless conversion uses current edits but only the apply button saves the converted lamp', () => {

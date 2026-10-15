@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three/webgpu';
 import {NetworkView} from '../../src/scene/view.js';
-import {defaultDisplay} from '../../src/output/output-display.js';
-import {compileModel,JKEngine} from '../../src/core/engine.js';
-import {Playback} from '../../src/core/playback.js';
+import {defaultDisplay} from '../../src/ui/output-display.js';
+import {compileModel,JKEngine} from '../../src/jk/engine.js';
+import {Playback} from '../../src/ui/playback.js';
 
 const bits=ids=>({kind:'bits',bits:ids,order:'lsb-first',mapping:'scale'});
-const model=()=>compileModel({nodes:[{id:'Q0',ex:'J0K(X0)'},{id:'Q1',ex:'J0K(X1)'}],initial_q:{0:[],1:[]},q_y:[{Y0:'Q0'},{Y1:'Q1'}]});
+const model=()=>compileModel({nodes:[{id:'Q0',ex:'J0K(X0)'},{id:'Q1',ex:'J0K(X1)'}],initial_q:{0:['Q0','Q1'],1:[]},q_y:[{Y0:'Q0'},{Y1:'Q1'}]});
 const bounds={min:{x:-2,y:-1,z:-1},max:{x:2,y:1,z:1}};
 function setup(t,config){
   const engine=new JKEngine(model()),view=new NetworkView({closest:()=>null});
@@ -19,7 +19,7 @@ function setup(t,config){
   const trajectory=[];
   const playback=new Playback(engine,{now:()=>0,skipBudgetMs:4,maxSkipSteps:1000,onChange:event=>{
     view.syncOutputs(engine,event);
-    if(event?.type==='execution')trajectory.push({ticket:event.ticket,...view.outputState.results[0].r});
+    if(event?.executions?.length)trajectory.push({ticket:event.ticket,...view.outputState.results[0].r});
   }});
   playback.skip=true;
   return {engine,view,playback,paints,trajectory};
@@ -36,7 +36,7 @@ test('one skip batch aggregates each Yi transition immediately and paints its ac
   assert.deepEqual(trajectory.map(({ticket,ready,bits,brightness})=>({ticket,ready,bits,brightness})),[
     {ticket:1,ready:false,bits:'1?',brightness:0},
     {ticket:2,ready:true,bits:'10',brightness:85},
-    {ticket:3,ready:true,bits:'00',brightness:0},
+    {ticket:3,ready:true,bits:'10',brightness:85},
     {ticket:4,ready:true,bits:'10',brightness:85},
   ]);
   assert.equal(paints.length,0);assert.equal(red(view),0);assert.deepEqual([...view.pendingLampDirty],[0]);
@@ -52,7 +52,7 @@ test('same-value publications cause no paint, but a change and return within one
   assert.equal(trajectory.length,2);assert.ok(trajectory.every(r=>r.brightness===85));assert.equal(view.pendingLampDirty.size,0);
   view.refresh(engine);assert.equal(paints.length,0);
   trajectory.length=0;
-  playback.send({X0:0});playback.send({X0:1});playback.tick(1/60);
+  playback.send({X0:0});playback.tick(1/60);playback.send({X0:1});playback.tick(1/60);
   assert.deepEqual(trajectory.map(r=>r.brightness),[0,85]);assert.equal(paints.length,0);
   view.refresh(engine);assert.equal(paints.length,1);assert.deepEqual(paints[0].indices,[0]);assert.equal(paints[0].results[0].r.brightness,85);
 });

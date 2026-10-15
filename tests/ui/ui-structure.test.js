@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { APP_CONFIG } from '../../src/config.js';
-import { defaultImageInputConfig } from '../../src/input/image-input.js';
-import { defaultDisplay, validateDisplay, resizeDisplay } from '../../src/output/output-display.js';
+import { APP_CONFIG } from '../../html/config.js';
+import { defaultImageInputConfig } from '../../src/ui/image-input.js';
+import { defaultDisplay, validateDisplay, resizeDisplay } from '../../src/ui/output-display.js';
 import { htmlSource, staticDocument } from '../helpers/ui-harness.js';
 
-const css = readFileSync(new URL('../../src/style.css', import.meta.url), 'utf8');
-const uiFiles = ['main.js', 'input/image-input-ui.js', 'output/output-display-ui.js', 'models/model-manager.js'];
+const css = readFileSync(new URL('../../html/style.css', import.meta.url), 'utf8');
+const uiFiles = ['html/main.js', 'src/ui/image-input-ui.js', 'src/ui/output-display-ui.js', 'src/ui/model-manager.js'];
 
 test('fixed dialogs, inspector panels, RGB controls and variable templates live in HTML exactly once', () => {
   const ids = [...htmlSource.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
@@ -17,6 +17,9 @@ test('fixed dialogs, inspector panels, RGB controls and variable templates live 
     assert.equal(document.getElementById(id)?.tagName, 'dialog', id);
   }
   const inspector = document.getElementById('inspector');
+  assert.deepEqual(inspector.querySelectorAll('.node-branch').map(branch => branch.querySelector('h3').textContent), [
+    '状态', 'EX · 从左到右原子求值', '事件 · 触发与传播',
+  ]);
   assert.deepEqual(inspector.querySelectorAll('[data-inspector-panel]').map(panel => panel.attributes.id), [
     'inspector-empty', 'inspector-input', 'inspector-output', 'inspector-jk', 'inspector-lamp',
   ]);
@@ -40,11 +43,13 @@ test('fixed dialogs, inspector panels, RGB controls and variable templates live 
     assert.equal(templates.length, 1, name);
     assert.ok(templates[0].content.firstElementChild, name);
   }
-  for (const id of ['model-download-link', 'display-download-link']) {
-    const link = document.getElementById(id);
-    assert.equal(link?.tagName, 'a');
-    assert.equal(link.hidden, true);
-  }
+  const link = document.getElementById('model-download-link');
+  assert.equal(link?.tagName, 'a');
+  assert.equal(link.hidden, true);
+  assert.ok(!document.getElementById('display-download-link'));
+  assert.equal(display.querySelectorAll('[data-display-action="export"]').length, 0);
+  assert.equal(display.querySelectorAll('[data-display-info="export-panel"]').length, 0);
+  assert.equal(display.querySelectorAll('[data-display-field="export-text"]').length, 0);
 });
 
 test('interface controllers clone HTML and restrict style writes to the documented dynamic variables', () => {
@@ -53,7 +58,7 @@ test('interface controllers clone HTML and restrict style writes to the document
   ]);
   const writtenVariables = new Set();
   for (const file of uiFiles) {
-    const source = readFileSync(new URL(`../../src/${file}`, import.meta.url), 'utf8');
+    const source = readFileSync(new URL(`../../${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /\b(?:innerHTML|outerHTML|insertAdjacentHTML)\b/, file);
     assert.doesNotMatch(source, /(?:['"`])\s*<\/?(?:div|button|label|input|select|option|span|dialog|fieldset|canvas)\b/i, file);
     assert.doesNotMatch(source, /\b(?:const|let|function)\s+(?:el|field|button)\s*(?:=\s*(?:\([^)]*\)|\w+)\s*=>|\()/, file);
@@ -86,7 +91,7 @@ test('the default tree is deeply frozen and preserves the agreed new-page behavi
   assert.equal(APP_CONFIG.outputBoard.cols, 3);
   assert.equal(APP_CONFIG.outputBoard.scale, 3);
   assert.equal(APP_CONFIG.outputBoard.enabled, false);
-  assert.equal(APP_CONFIG.scene.layout, '4D');
+  assert.equal(APP_CONFIG.scene.layout, '5D');
   assert.equal(APP_CONFIG.playback.speed.value, 1);
   assert.equal(APP_CONFIG.playback.skipAnimation, true);
   assert.equal(APP_CONFIG.lists.queue.rowHeight, 36);
@@ -94,7 +99,7 @@ test('the default tree is deeply frozen and preserves the agreed new-page behavi
   assert.throws(() => { APP_CONFIG.outputBoard.scale = 9; }, TypeError);
 });
 
-test('runtime defaults are independent copies and missing legacy scale remains one', () => {
+test('runtime defaults are independent copies and missing old scale is rejected', () => {
   const first = defaultDisplay();
   const second = defaultDisplay();
   first.enabled = true;
@@ -110,8 +115,8 @@ test('runtime defaults are independent copies and missing legacy scale remains o
   assert.equal(APP_CONFIG.imageInput.selection.width, 3);
   const legacy = defaultDisplay(1, 1);
   delete legacy.scale;
-  assert.equal(validateDisplay(legacy).scale, 1);
-  assert.equal(resizeDisplay(legacy, 2, 2).scale, 1);
+  assert.throws(() => validateDisplay(legacy));
+  assert.throws(() => resizeDisplay(legacy, 2, 2));
   assert.equal(defaultDisplay().scale, 3);
   assert.equal(Object.hasOwn(legacy, 'scale'), false, 'compatibility normalization does not mutate imported data');
 });

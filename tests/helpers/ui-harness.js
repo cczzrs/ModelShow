@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-export const mainSource = readFileSync(new URL('../../src/main.js', import.meta.url), 'utf8');
-export const htmlSource = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+export const mainSource = readFileSync(new URL('../../html/main.js', import.meta.url), 'utf8');
+export const htmlSource = readFileSync(new URL('../../html/index.html', import.meta.url), 'utf8');
 
 /** Extract a real function, allowing formatting changes but preserving its body. */
 export function sourceFunction(source, name) {

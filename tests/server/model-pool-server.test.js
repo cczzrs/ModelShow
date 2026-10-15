@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {serializeModel,compileSnapshot} from '../../src/jk/model-schema.js';
 import http from 'node:http';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { createModelPoolServer } from '../../server/model-pool-server.js';
-import { parseModelPool } from '../../src/models/model-pool.js';
+import { createModelPoolServer } from '../../html/server/model-pool-server.js';
+import { parseModelPool } from '../../src/jk/model-pool.js';
 
-const model = name => ({name, md5: 'original-md5', nodes: [{id: 'Q2Label', ex: ' J0 K(X0) '}], initial_q: {0: [], 1: []}, q_y: [{Y0: 'Q2Label'}], custom: {keep: true}});
+const model = name => serializeModel({name, nodes: [{id: 'Q0', ex: 'J0K(X0)'}], initial_q: {0: ['Q0'], 1: []}, q_y: [{Y0: 'Q0'}]}, {createdAt:'2026-10-02T00:1790899200000000000'});
 const request = (address, route = '/api/model-pool', {method = 'GET', headers = {}, body} = {}) => new Promise((resolve, reject) => {
   const content = body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body);
   const req = http.request(`${address}${route}`, {method, headers: {...(content === undefined ? {} : {'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(content)}), ...headers}}, response => {
@@ -53,7 +54,7 @@ function memoryStore(source) {
 async function fixture(t, options = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'modelshow-pool-'));
   const distDir = path.join(directory, 'dist');
-  const original = `${JSON.stringify(model('原始模型'), null, 2)}\n`;
+  const original = `${JSON.stringify({version:1,revision:0,temporary:[],permanent:[{id:'example',createdAt:'2026-10-08T00:00:00Z',promotedAt:'2026-10-08T00:00:00Z',model:model('原始模型')}]}, null, 2)}\n`;
   const storage = memoryStore(original);
   await fs.mkdir(distDir);
   await fs.writeFile(path.join(distDir, 'index.html'), '<!doctype html><title>Model pool</title>');
@@ -78,7 +79,7 @@ async function fixture(t, options = {}) {
   return {directory, storage, distDir, original, start, ...await start()};
 }
 
-test('public startup preserves legacy data on GET and permits temporary management without enabling permanent writes', async t => {
+test('public startup preserves current V4 data on GET and permits temporary management without enabling permanent writes', async t => {
   const {address, storage, directory, original} = await fixture(t);
   const read = await request(address);
   assert.equal(read.status, 200);
@@ -103,6 +104,31 @@ test('public startup preserves legacy data on GET and permits temporary manageme
   assert.equal(deleted.data.pool.revision, 2);
   assert.equal(deleted.data.pool.temporary.length, 0);
   assert.deepEqual(deleted.data.pool.permanent, read.data.pool.permanent);
+});
+
+test('the HTTP boundary rejects historical or incomplete snapshots without writing shared storage', async t => {
+  const {address, storage, original} = await fixture(t);
+  for (const change of [
+    raw => { raw.format = 'jk-logic-structure-V3.1.0'; },
+    raw => { delete raw.FIFOS; },
+    raw => { raw.nodes[0].propagation = 'q=0/1'; },
+    raw => { raw.outputDisplay = {}; },
+  ]) {
+    const raw = model('invalid'); change(raw);
+    const result = await request(address, '/api/model-pool', {
+      method: 'POST', body: {action: 'import', revision: 0, model: raw},
+    });
+    assert.equal(result.status, 400);
+    assert.equal(storage.writes, 0);
+    assert.equal(storage.source, original);
+  }
+  const oldPool = JSON.parse(original);
+  oldPool.permanent[0].model.format = 'jk-logic-structure-V3.1.0';
+  storage.replace(JSON.stringify(oldPool));
+  const before = storage.source;
+  assert.equal((await request(address)).status, 500);
+  assert.equal(storage.source, before);
+  assert.equal(storage.writes, 0);
 });
 
 test('authenticated import, promotion and deletion persist across clients and server instances with all original fields', async t => {

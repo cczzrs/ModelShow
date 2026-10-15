@@ -4,7 +4,7 @@ dist/
 .DS_Store
 .sites-runtime/
 artifacts/
-server/.data/
+html/server/.data/
 .env
 .env.*
 !.env.example

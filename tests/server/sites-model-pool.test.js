@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSitesR2Store, MODEL_POOL_KEY } from '../../server/sites-r2-store.js';
-import { createModelPoolApi } from '../../server/model-pool-api.js';
-import { parseModelPool } from '../../src/models/model-pool.js';
+import {serializeModel,compileSnapshot} from '../../src/jk/model-schema.js';
+import { createSitesR2Store, MODEL_POOL_KEY } from '../../html/server/sites-r2-store.js';
+import { createModelPoolApi } from '../../html/server/model-pool-api.js';
+import { parseModelPool } from '../../src/jk/model-pool.js';
 
-const model = { name: '保留原模型', md5: 'original', nodes: [{ id: 'Q0L1', ex: 'J0K(X0)' }], initial_q: { 0: [], 1: [] }, q_y: [{ Y0: 'Q0L1' }], outputDisplay: { version: 1, enabled: false, rows: 1, columns: 1, scale: 2, lamps: [] }, extra: { keep: true } };
-const seed = parseModelPool(model);
+const model = serializeModel({ name: '保留原模型', nodes: [{ id: 'Q0', ex: 'J0K(X0)' }], initial_q: { 0: ['Q0'], 1: [] }, q_y: [{ Y0: 'Q0' }] }, {createdAt:'2026-10-02T00:1790899200000000000'});
+const seed = parseModelPool({version:1,revision:0,temporary:[],permanent:[{id:'example',createdAt:'2026-10-08T00:00:00Z',promotedAt:'2026-10-08T00:00:00Z',model}]});
 
 function bucketFixture(initial = seed) {
   let source = initial === null ? null : JSON.stringify(initial), version = 1;

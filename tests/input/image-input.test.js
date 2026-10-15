@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {compileModel,JKEngine} from '../../src/core/engine.js';
-import {IMAGE_INPUT_LIMITS,defaultImageInputConfig,validateConfig,validateSelection,clampSelection,selectionBitCount,extractPixelData,mapPixelData} from '../../src/input/image-input.js';
+import {compileModel,JKEngine} from '../../src/jk/engine.js';
+import {IMAGE_INPUT_LIMITS,defaultImageInputConfig,validateConfig,validateSelection,clampSelection,selectionBitCount,extractPixelData,mapPixelData} from '../../src/ui/image-input.js';
 
 const config=overrides=>({...defaultImageInputConfig(),...overrides});
 const image=(width,height,data)=>({width,height,data:new Uint8ClampedArray(data)});
@@ -98,12 +98,13 @@ test('configuration and malformed source buffers fail clearly; defaults are inde
  assert.throws(()=>extractPixelData(sample,{...whole,width:1.5},config()),/安全整数/);
 });
 
-test('generated JSON is inert until explicitly sent and passes the existing JK engine',()=>{
- const model=compileModel({nodes:ids(8).map((id,i)=>({id:`Q${i}`,ex:`J0K(${id})`})),initial_q:{0:[],1:[]},q_y:ids(8).map((_,i)=>({[`Y${i}`]:`Q${i}`}))});
+test('generated JSON is inert until explicitly sent and passes the V4 input-copy tasks',()=>{
+ const model=compileModel({nodes:ids(8).map((id,i)=>({id:`Q${i}`,ex:`J0K(${id})`})),initial_q:{0:ids(8).map((_,i)=>`Q${i}`),1:[]},q_y:ids(8).map((_,i)=>({[`Y${i}`]:`Q${i}`}))});
+ assert.equal(model.canExecute,true);
  const engine=new JKEngine(model),gray=config({encoding:'gray'});
  const output=mapPixelData(extractPixelData(image(1,1,[165,165,165,255]),{x:0,y:0,width:1,height:1},gray),gray,model.inputs);
  assert.equal(engine.length,0);assert.equal(engine.total,0);assert.equal(engine.history.length,0);assert.equal(engine.latest.size,0);
- const sent=engine.send(JSON.parse(output.json));assert.equal(sent.accepted.length,8);assert.equal(sent.ignored.length,0);
+ const sent=engine.send(JSON.parse(output.json));assert.equal(sent.accepted.length,8);assert.equal(sent.queued.length,8);
  while(engine.length)engine.step();
  assert.deepEqual([...engine.outputs.values()],[1,0,1,0,0,1,0,1]);
 });

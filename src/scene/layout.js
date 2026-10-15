@@ -1,6 +1,6 @@
 /** Deterministic layouts in world units. This module never reads or mutates runtime q. */
-import { APP_CONFIG } from '../config.js';
-import { compareNodes } from '../core/node-id.js';
+import { APP_CONFIG } from '../../html/config.js';
+import { compareNodes } from '../jk/node-id.js';
 export const LAYOUT_MODES = ['auto', '1D', '2D', '3D', '4D', '5D'];
 export const DEFAULT_LAYOUT_MODE = APP_CONFIG.scene.layout;
 const EPS = 1e-9;

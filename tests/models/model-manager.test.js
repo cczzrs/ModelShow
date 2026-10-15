@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ModelManager} from '../../src/models/model-manager.js';
-import {defaultDisplay,exportDisplayModel,exportCurrentDisplayModel} from '../../src/output/output-display.js';
+import {ModelManager} from '../../src/ui/model-manager.js';
+import {compileModel, serializeModel} from '../../src/jk/model-schema.js';
+import {exportCurrentModel} from '../../src/jk/model-schema.js';
+import {JKEngine} from '../../src/jk/engine.js';
+import {defaultDisplay} from '../../src/ui/output-display.js';
 
 const dates = ['2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z', '2026-09-03T00:00:00.000Z'];
-const model = name => ({name, md5: `${name}-original-md5`, nodes: [{id: 'Q0Old', ex: ' J0 K(X0) '}], initial_q: {0: [], 1: []}, q_y: [{Y0: 'Q0Old'}], custom: {keep: [1, null]}});
+const model = name => serializeModel({name, nodes: [{id: 'Q0', ex: 'J0K(X0)'}], initial_q: {0: ['Q0'], 1: []}, q_y: [{Y0: 'Q0'}]}, {createdAt: '2026-10-02T00:1790899200000000000'});
 const entry = (id, time = dates[0], permanent = true) => ({id, createdAt: time, promotedAt: permanent ? time : null, model: model(id)});
 const pool = (revision = 0) => ({version: 1, revision, permanent: [entry('permanent')], temporary: [entry('temporary', dates[2], false)]});
 const freeze = value => { if (value && typeof value === 'object') {Object.freeze(value);Object.values(value).forEach(freeze);} return value; };
@@ -153,9 +156,10 @@ test('import, promote and delete use server revisions, selection and raw model s
   assert.equal(h.manager.selectedId, 'server-assigned');
   assert.deepEqual(h.manager.pool, afterImport);
   assert.deepEqual(h.loads.at(-1), original);
-  assert.equal(h.loads.at(-1).nodes[0].id, 'Q0Old');
-  assert.equal(h.loads.at(-1).nodes[0].ex, ' J0 K(X0) ');
-  assert.equal(h.loads.at(-1).md5, 'user-raw-original-md5');
+  assert.equal(h.loads.at(-1).nodes[0].id, 'Q0');
+  assert.equal(h.loads.at(-1).nodes[0].tag, undefined);
+  assert.equal(h.loads.at(-1).nodes[0].ex, 'J0K(X0)');
+  assert.equal(h.loads.at(-1).md5, original.md5);
   const afterPromote = freeze({...pool(9), permanent: [...initial.permanent, {...imported, promotedAt: dates[2]}], temporary: initial.temporary});
   h.reply({pool: afterPromote, selectedId: imported.id});
   const loadsBeforePromotion = h.loads.length;
@@ -183,7 +187,7 @@ test('import, promote and delete use server revisions, selection and raw model s
   assert.deepEqual(h.manager.pool, afterDelete);
   assert.equal(h.manager.selectedId, 'permanent');
   assert.deepEqual(h.loads.at(-1), initial.permanent[0].model);
-  assert.equal(original.nodes[0].id, 'Q0Old');
+  assert.equal(original.nodes[0].id, 'Q0');
   assert.equal(initial.revision, 7);
 });
 
@@ -232,7 +236,7 @@ test('a wrong password clears the field, preserves the model and allows a separa
 
 test('static fallback permits local import, selection and download while shared mutations stay disabled', async t => {
   const h = harness(t), legacy = freeze(model('legacy example'));
-  h.reject(new Error('API unavailable'));h.reply(legacy);
+  h.reject(new Error('API unavailable'));h.reply({...pool(),temporary:[],permanent:[{...entry('example'),model:legacy}]});
   await h.manager.loadInitial();
   assert.deepEqual(h.calls.map(call => call.url), ['./api/model-pool', './example.json']);
   assert.equal(h.manager.remote, false);
@@ -532,7 +536,7 @@ test('reconnected local promotion uploads once, then retries only promotion afte
 });
 
 test('an import interrupted by a network failure preserves the raw model as a local entry', async t => {
-  const h=harness(t),original=freeze({...model('unsent'),extra:['keep',7]});
+  const h=harness(t),original=freeze({...model('unsent'),display:{show:'3D'}});
   h.api(pool(7));await h.manager.loadInitial();
   h.reject(new TypeError('Failed to fetch'));
   await h.manager.importText(JSON.stringify(original));
@@ -570,7 +574,7 @@ test('a server 503 import failure becomes local but a 409 remains a revision con
 
 test('download uses the current edited model, retains raw fields and releases its Blob URL', async t => {
   const h=harness(t);h.api(pool());await h.manager.loadInitial();
-  const edited=freeze({...model('edited model'),outputDisplay:{version:1,enabled:false},metadata:{custom:'untouched'}});
+  const edited=freeze({...model('edited model'),display:{show:'3D'}});
   h.element('model-json').value=JSON.stringify(edited);h.element('model-json').emit('input');
   const loadsBefore=h.loads.length,callsBefore=h.calls.length;
   const text=await h.element('model-download').click();
@@ -607,24 +611,43 @@ test('empty or invalid model JSON never creates a download', async t => {
   assert.equal(h.loads.length,1);
 });
 
-test('the download button uses the current board exporter offline, including changes after opening management', async t => {
-  let loaded,config=defaultDisplay(1,1);
-  const h=harness(t,raw=>exportCurrentDisplayModel(raw,loaded,config));
-  const original=freeze(model('live display'));
-  h.reject(new Error('offline'));h.reply(original);await h.manager.loadInitial();loaded=h.loads.at(-1);
-  config.enabled=true;config.scale=2.5;
-  config.pixels[0].channels.r={kind:'bits',bits:['Y0'],order:'msb-first',mapping:'direct'};
-  config.pixels[0].channels.g={kind:'fixed',value:119};
-  const requests=h.calls.length,loads=h.loads.length;
-  const first=await h.element('model-download').click();
-  assert.deepEqual(JSON.parse(first),exportDisplayModel(loaded,config));
-  assert.deepEqual(JSON.parse(await h.blobs[0].text()).outputDisplay,config);
-  config.enabled=false;config.scale=3;
-  await h.element('model-download').click();
-  assert.deepEqual(JSON.parse(await h.blobs[1].text()).outputDisplay,config,'each click reads the latest config and keeps hidden-board bindings');
-  assert.deepEqual(JSON.parse(h.element('model-json').value),original,'export does not modify the editor or pool');
-  assert.equal(h.calls.length,requests);assert.equal(h.loads.length,loads);
-  assert.equal(h.manager.remote,false);
+test('download regenerates stale structure fingerprints and statistics after an EX edit', async t => {
+  const h = harness(t); h.api(pool()); await h.manager.loadInitial();
+  const original = h.manager.entry().model;
+  const edited = structuredClone(original);
+  edited.nodes.push({id:'Q1',ex:'J0K(Q0)K1'}); edited.q_y=[{Y0:'Q1'}]; edited.jk_bits_max=2;
+  h.element('model-json').value = JSON.stringify(edited);
+  const exported = JSON.parse(h.manager.download());
+  assert.notEqual(exported.md5, original.md5);
+  assert.notEqual(exported.format_md5, original.format_md5);
+  assert.equal(exported.ex_operation_sum, 5);
+  assert.equal(exported.nodes[0].tag, undefined);
+  assert.deepEqual(exported.custom, original.custom);
+  assert.equal(compileModel(exported).integrity.status, 'verified');
+  assert.equal(h.manager.entry().model.md5, original.md5);
+  assert.equal(JSON.parse(h.element('model-json').value).md5, original.md5);
+});
+
+test('download rejects semantic errors instead of giving an invalid model a fresh hash', async t => {
+  const h = harness(t); h.api(pool()); await h.manager.loadInitial();
+  const invalid = structuredClone(h.manager.entry().model);
+  invalid.nodes[0].ex = 'J0K1';
+  h.element('model-json').value = JSON.stringify(invalid);
+  assert.equal(h.manager.download(), undefined);
+  assert.equal(h.blobs.length, 0);
+  assert.match(h.element('import-error').textContent, /ex_source|输入副本|唯一复制/);
+});
+
+test('download captures current q and pending queues without reloading the model', async t => {
+ let loaded,engine;
+ const h=harness(t,raw=>exportCurrentModel(raw,loaded,engine,'3D'));
+ h.reject(new Error('offline'));h.reply(pool());await h.manager.loadInitial();loaded=h.loads.at(-1);engine=new JKEngine(compileModel(loaded));
+ engine.send({X0:1});engine.step();engine.send({X0:0});
+ const requests=h.calls.length,loads=h.loads.length;
+ const first=JSON.parse(await h.element('model-download').click());
+ assert.deepEqual(first.initial_q,{0:[],1:['Q0']});assert.deepEqual(first.FIFOS,{'Xi.FIFO':[{Q0:{}}],'Qi.FIFO':[]});assert.equal(first.display.show,'3D');
+ assert.equal(Object.hasOwn(first,'outputDisplay'),false);
+ assert.equal(h.calls.length,requests);assert.equal(h.loads.length,loads);assert.equal(engine.length,1);
 });
 
 test('a disconnected promotion retains the already uploaded server entry and does not upload it again', async t => {
@@ -660,7 +683,7 @@ test('a disconnected promotion retains the already uploaded server entry and doe
 });
 
 test('an unsaved editor draft remains downloadable across an offline and successful refresh', async t => {
-  const h=harness(t),draft={...model('edited draft'),custom:{kept:true}};
+  const h=harness(t),draft={...model('edited draft'),display:{show:'2D'}};
   h.api(pool());await h.manager.loadInitial();
   const draftText=JSON.stringify(draft);
   h.element('model-json').value=draftText;h.element('model-json').emit('input');
@@ -674,6 +697,118 @@ test('an unsaved editor draft remains downloadable across an offline and success
   assert.equal(h.manager.localEntries.size,0,'editing alone must not create or upload a model');
   assert.equal(h.calls.filter(call=>call.method==='POST').length,0);
   assert.equal(h.loads.length,1);
+});
+
+test('applied boards update only the editor display and require importing before promotion', async t => {
+  const h = harness(t), source = freeze(pool());
+  h.api(source);await h.manager.loadInitial();
+  h.manager.select('temporary', true);
+  const original = structuredClone(h.manager.entry().model), requests = h.calls.length, loads = h.loads.length;
+  const board = defaultDisplay(1, 2);board.enabled = true;
+  assert.equal(h.manager.syncOutputBoard(board), true);
+  const draft = JSON.parse(h.element('model-json').value);
+  assert.deepEqual(draft, {...original, display: {...original.display, outputBoard: board}});
+  assert.equal(draft.md5, original.md5);
+  assert.equal(draft.format_md5, original.format_md5);
+  assert.equal(h.manager.editorValue, JSON.stringify(original, null, 2));
+  assert.deepEqual(h.manager.pool, source);
+  assert.equal(h.element('model-pool-add').disabled, true);
+  await h.manager.mutate({action: 'promote', id: 'temporary'});
+  assert.match(h.element('import-error').textContent, /请先导入 JSON/);
+  assert.equal(h.element('model-auth-dialog').open, false);
+  assert.equal(h.calls.length, requests);
+  assert.equal(h.loads.length, loads);
+  board.pixels[0].channels.r.value = 255;
+  assert.equal(JSON.parse(h.element('model-json').value).display.outputBoard.pixels[0].channels.r.value, 0);
+});
+
+test('reapplying the same board keeps JSON formatting and later input remains an editable draft', async t => {
+  const h = harness(t), board = defaultDisplay(1, 1);
+  h.api(pool());await h.manager.loadInitial();
+  h.manager.syncOutputBoard(board);
+  const compact = JSON.stringify(JSON.parse(h.element('model-json').value));
+  h.element('model-json').value = compact;
+  assert.equal(h.manager.syncOutputBoard(board), true);
+  assert.equal(h.element('model-json').value, compact);
+  const changed = JSON.parse(compact);changed.name = 'user draft';changed.display.outputBoard.scale = 2;
+  const typed = JSON.stringify(changed) + '\n';
+  h.element('model-json').value = typed;h.element('model-json').emit('input');
+  assert.equal(h.element('model-json').value, typed);
+  assert.equal(h.calls.length, 1);
+});
+
+test('board synchronization preserves other draft fields and reopening keeps the combined JSON', async t => {
+  const h = harness(t), board = defaultDisplay(2, 1);
+  h.api(pool());await h.manager.loadInitial();
+  const draft = structuredClone(h.manager.entry().model);
+  draft.name = 'unfinished graph';draft.nodes[0].ex = 'J1';draft.display.show = '2D';
+  draft.FIFOS['Xi.FIFO'].push({Q0: {}});
+  h.element('model-json').value = JSON.stringify(draft);
+  h.manager.syncOutputBoard(board);
+  const combined = h.element('model-json').value;
+  assert.deepEqual(JSON.parse(combined), {...draft, display: {...draft.display, outputBoard: board}});
+  h.api(pool(1));await h.manager.open();h.manager.close();
+  assert.equal(h.element('model-json').value, combined);
+  h.reject(new Error('offline'));await h.manager.open();
+  assert.equal(h.element('model-json').value, combined);
+  assert.equal(h.manager.entry().model.name, 'permanent');
+  assert.equal(h.manager.localEntries.size, 0);
+  assert.equal(h.loads.length, 1);
+  assert.equal(h.calls.filter(call => call.method === 'POST').length, 0);
+});
+
+test('the applied board survives refresh even when it initially matched the stored board', async t => {
+  const h = harness(t), board = defaultDisplay(1, 1), source = pool();
+  source.permanent[0].model.display.outputBoard = board;
+  h.api(source);await h.manager.loadInitial();
+  h.manager.syncOutputBoard(board);
+  assert.equal(h.element('model-json').value, h.manager.editorValue);
+  h.api(pool(1));await h.manager.open();
+  assert.deepEqual(JSON.parse(h.element('model-json').value).display.outputBoard, board);
+  assert.equal(h.manager.entry().model.display.outputBoard, undefined);
+});
+
+test('invalid JSON retains the latest pending board and applies it once after valid input', async t => {
+  const h = harness(t), board = defaultDisplay(1, 1), latest = defaultDisplay(1, 2);
+  h.api(pool());await h.manager.loadInitial();
+  h.element('model-json').value = '{"name":';
+  assert.equal(h.manager.syncOutputBoard(board), false);
+  assert.equal(h.manager.syncOutputBoard(latest), false);
+  h.api(pool(1));await h.manager.open();
+  assert.equal(h.element('model-json').value, '{"name":');
+  for (const text of ['null', '[]', '{"display":null}', '{"display":[]}']) {
+    h.element('model-json').value = text;h.element('model-json').emit('input');
+    assert.equal(h.element('model-json').value, text);
+  }
+  const draft = {...h.manager.entry().model, name: 'finished typing'};
+  h.element('model-json').value = JSON.stringify(draft);h.element('model-json').emit('input');
+  assert.deepEqual(JSON.parse(h.element('model-json').value), {...draft, display: {...draft.display, outputBoard: latest}});
+  const compact = JSON.stringify(JSON.parse(h.element('model-json').value));
+  h.element('model-json').value = compact;h.element('model-json').emit('input');
+  assert.equal(h.element('model-json').value, compact);
+  assert.equal(h.calls.filter(call => call.method === 'POST').length, 0);
+});
+
+test('switching, reloading or importing a model clears the previous board synchronization', async t => {
+  const h = harness(t), board = defaultDisplay(1, 2), imported = model('independent import');
+  imported.display.outputBoard = defaultDisplay(2, 1);
+  h.reject(new Error('offline'));h.reply(pool());await h.manager.loadInitial();
+  h.manager.syncOutputBoard(board);
+  h.manager.select('temporary', true);
+  assert.equal(JSON.parse(h.element('model-json').value).display.outputBoard, undefined);
+  h.manager.select('permanent', true);
+  assert.equal(JSON.parse(h.element('model-json').value).display.outputBoard, undefined);
+  h.manager.syncOutputBoard(board);
+  h.manager.select('permanent', true);
+  assert.equal(JSON.parse(h.element('model-json').value).display.outputBoard, undefined);
+  h.element('model-json').value = '{';h.manager.syncOutputBoard(board);
+  await h.manager.importText(JSON.stringify(imported));
+  assert.deepEqual(JSON.parse(h.element('model-json').value), imported);
+  const compact = JSON.stringify(imported);
+  h.element('model-json').value = compact;h.element('model-json').emit('input');
+  assert.equal(h.element('model-json').value, compact);
+  assert.equal(h.manager.outputBoardSync, null);
+  assert.equal(h.calls.filter(call => call.method === 'POST').length, 0);
 });
 
 test('reopening management keeps static groups and binds each event only once', async t => {
@@ -701,7 +836,10 @@ test('invalid imports retain the selected model, local entries and the running s
   const original = pool();
   h.api(original);
   await h.manager.loadInitial();
-  for (const text of ['{', JSON.stringify({nodes: 'invalid'})]) {
+  const badHash=model('bad hash');badHash.md5='0'.repeat(32);
+  const badStats=model('bad statistics');badStats.ex_source_sum++;
+  const simplified={nodes:[{id:'Q0',ex:'J0K(X0)'}],initial_q:{0:['Q0'],1:[]},q_y:[{Y0:'Q0'}]};
+  for (const text of ['{', JSON.stringify({nodes: 'invalid'}),JSON.stringify(badHash),JSON.stringify(badStats),JSON.stringify(simplified)]) {
     await h.manager.importText(text);
     assert.equal(h.manager.selectedId, 'permanent');
     assert.deepEqual(h.manager.pool, original);
@@ -710,6 +848,15 @@ test('invalid imports retain the selected model, local entries and the running s
     assert.equal(h.calls.length, 1);
     assert.match(h.element('import-error').textContent, /导入失败/);
   }
+});
+
+test('metadata-only tampering never creates a download or alters the pool', async t=>{
+ const h=harness(t);h.api(pool());await h.manager.loadInitial();const original=h.manager.entry().model;
+ for(const change of [raw=>{raw.md5='0'.repeat(32);},raw=>{raw.ex_operation_sum++;}]){
+  const draft=structuredClone(original);change(draft);h.element('model-json').value=JSON.stringify(draft);
+  assert.equal(h.manager.download(),undefined);assert.equal(h.blobs.length,0);
+  assert.match(h.element('import-error').textContent,/下载失败/);assert.deepEqual(h.manager.entry().model,original);
+ }
 });
 
 test('destroy clears listeners and temporary downloads without removing static markup', async t => {

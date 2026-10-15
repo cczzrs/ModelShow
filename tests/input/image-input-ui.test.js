@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {ImageInputUI} from '../../src/input/image-input-ui.js';
-import {defaultImageInputConfig} from '../../src/input/image-input.js';
-import {compileModel,JKEngine} from '../../src/core/engine.js';
+import {ImageInputUI} from '../../src/ui/image-input-ui.js';
+import {defaultImageInputConfig} from '../../src/ui/image-input.js';
+import {compileModel,JKEngine} from '../../src/jk/engine.js';
 
 const png=await readFile(new URL('../fixtures/image-input-rgba.png',import.meta.url));
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
@@ -53,7 +53,7 @@ function harness(t){
     view:{scale:1,x:0,y:0,width:400,height:300},field:lookup(fields),info:lookup(infos),action:lookup(actions),canvas:screen,context:screen.getContext('2d'),
     preview:canvas(),jsonPreview:element(),stage:{querySelector:()=>empty},dialog:{open:true,close(){this.open=false;},showModal(){this.open=true;}},
     fileInput:{clicks:0,click(){this.clicks++;}},
-    presetButtons:['b1.png','b2.png'].map(name=>({dataset:{preset:name},attributes:{},querySelector:()=>({src:`http://localhost/assets/images/${name}`}),setAttribute(key,value){this.attributes[key]=value;}})),
+    presetButtons:['b1.png','b2.png'].map(name=>({dataset:{preset:name},attributes:{},querySelector:()=>({src:`http://localhost/${name}`}),setAttribute(key,value){this.attributes[key]=value;}})),
     canvasColors:{getPropertyValue:()=>''},
     onApply(){},onApplied(){},
   });
@@ -84,7 +84,7 @@ test('first open loads b1 without a local chooser, and reopening restores the se
   const h=harness(t),ui=h.ui,job=h.prepareDecode();ui.dialog.open=false;
   ui.open();ui.open();
   assert.equal(ui.dialog.open,true);assert.equal(ui.fileInput.clicks,0);assert.equal(h.requests.length,1);
-  assert.match(h.requests[0].url,/\/assets\/images\/b1\.png$/);assert.equal(ui.loading,true);
+  assert.equal(h.requests[0].url,'http://localhost/b1.png');assert.equal(ui.loading,true);
   h.requests[0].respond();await job.started;
   const image=bitmap();job.finish(image);await h.imports[0];
   assert.equal(image.closed,1);assert.equal(ui.sourceName,'b1.png');assert.equal(ui.sourcePreset,'b1.png');
@@ -177,16 +177,17 @@ test('failed image replacement preserves the previous image, selection and usabl
 
 test('model changes invalidate old mappings and an in-flight image maps only the latest Xi before applying inert JSON',async t=>{
   const h=await loaded(t),ui=h.ui,job=await h.start('pending.png');
-  ui.setModel(ids(40,16),2);
+  ui.setModel(ids(0,16),2);
   assert.equal(ui.action('apply').disabled,true);assert.equal(ui.jsonPreview.value,'');
   let calls=0,text='previous',appliedVersion,focus=0;
   ui.onApply=(json,version)=>{calls++;text=json;appliedVersion=version;};ui.onApplied=()=>focus++;
   ui.apply();assert.equal(calls,0);
-  ui.setModel(ids(80),3);const image=bitmap([165,165,165,165]);job.finish(image);await job.done;
-  assert.deepEqual(Object.keys(JSON.parse(ui.jsonPreview.value)),ids(80));assert.equal(ui.result.modelVersion,3);
-  const model=compileModel({nodes:ids(80).map((id,i)=>({id:`Q${i}`,ex:`J0K(${id})`})),initial_q:{0:[],1:[]},q_y:[{Y0:'Q0'}]}),engine=new JKEngine(model);
+  ui.setModel(ids(),3);const image=bitmap([165,165,165,165]);job.finish(image);await job.done;
+  assert.deepEqual(Object.keys(JSON.parse(ui.jsonPreview.value)),ids());assert.equal(ui.result.modelVersion,3);
+  const model=compileModel({nodes:ids().map((id,i)=>({id:`Q${i}`,ex:`J0K(${id})`})),initial_q:{0:ids().map((_,i)=>`Q${i}`),1:[]},q_y:ids().map((_,i)=>({[`Y${i}`]:`Q${i}`}))}),engine=new JKEngine(model);
+  assert.equal(model.canExecute,true);
   ui.apply();assert.equal(calls,1);assert.equal(appliedVersion,3);assert.equal(focus,1);assert.equal(ui.dialog.open,false);
-  assert.deepEqual(Object.keys(JSON.parse(text)),ids(80));assert.equal(Object.values(JSON.parse(text)).join(''),'10100101');
+  assert.deepEqual(Object.keys(JSON.parse(text)),ids());assert.equal(Object.values(JSON.parse(text)).join(''),'10100101');
   assert.equal(engine.length,0);assert.equal(engine.total,0);assert.equal(engine.latest.size,0);assert.equal(engine.history.length,0);
 });
 
@@ -239,7 +240,7 @@ function staticDialog() {
   const actions = new Map(['choose', 'close', 'fit', 'original', 'apply'].map(key => [key, target()]));
   const presets = ['b1.png', 'b2.png'].map(name => target({
     dataset: { preset: name },
-    querySelector: () => ({ src: `http://localhost/assets/images/${name}` }),
+    querySelector: () => ({ src: `http://localhost/${name}` }),
     setAttribute() {},
   }));
   const screen = target(canvas());

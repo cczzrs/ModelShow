@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {compileModel,JKEngine} from '../../src/core/engine.js';
+import {compileModel,JKEngine} from '../../src/jk/engine.js';
 import {createLayout,LAYOUT_MODES,spherePoints,layoutEdges,readability} from '../../src/scene/layout.js';
-const make=(ex,outputs=[])=>compileModel({nodes:ex.map((ex,i)=>({id:`Q${i}`,ex})),initial_q:{'0':[],'1':[]},q_y:outputs});
-const fixture=()=>compileModel(JSON.parse(readFileSync(new URL('../fixtures/jk-logic-structure-v262.json',import.meta.url),'utf8')));
+const make=(ex,outputs=ex.length?[{Y0:`Q${ex.length-1}`}]:[])=>compileModel({nodes:ex.map((ex,i)=>({id:`Q${i}`,ex})),initial_q:{0:ex.flatMap((value,i)=>value===`J0K(X${i})`?[`Q${i}`]:[]),1:[]},q_y:outputs});
+const fixture=()=>compileModel(JSON.parse(readFileSync(new URL('../../html/example.json',import.meta.url),'utf8')).permanent[0].model);
 const b=ps=>Object.fromEntries(['x','y','z'].map(a=>[a,[Math.min(...ps.map(p=>p[a])),Math.max(...ps.map(p=>p[a]))]]));
 const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
 const separation=r=>{const ps=[...r.positions.values()];for(let i=0;i<ps.length;i++){assert.ok(Object.values(ps[i]).every(Number.isFinite));for(let j=0;j<i;j++)assert.ok(distance(ps[i],ps[j])>=1-1e-9);}};
-test('all layouts deterministic, finite and separated for fixture, singleton, empty and feedback graphs',()=>{
+test('all layouts remain diagnostic for empty or rejected feedback graphs and render valid V4 models deterministically',()=>{
  for(const model of [fixture(),make(['J0K(X0)']),make([]),make(['J0K(Q1)','J0K(Q0)','J0K(Q2)','J0'])])for(const mode of LAYOUT_MODES){const r=createLayout(model,mode);assert.deepEqual(r,createLayout(model,mode));separation(r);assert.ok(Number.isFinite(r.metrics.score));}
 });
 test('1D has three vertical columns, numbered from top to bottom on Y with Z zero',()=>{
@@ -34,7 +34,8 @@ test('3D uses a near cube only for JK; terminals stay identical YZ planes',()=>{
  for(const keys of [model.inputs,model.outputs.map(o=>o.id)]){const ps=keys.map(k=>r.positions.get(k));assert.ok(ps.every(p=>p.x===ps[0].x));const shift=ps[0].x-flat.positions.get(keys[0]).x;keys.forEach((k,i)=>assert.deepEqual(ps[i],{...flat.positions.get(k),x:flat.positions.get(k).x+shift}));}
 });
 test('4D uses references rather than numeric IDs and never reverses acyclic edges on X',()=>{
- const model=make(Array.from({length:16},(_,i)=>i===15?'J0K(X0)':`J0K(Q${i+1})`));
+ const model=make(Array.from({length:16},(_,i)=>i===0?'J0K(X0)':i===15?'J0K(Q0)':`J0K(Q${i+1})`),[{Y0:'Q1'}]);
+ assert.equal(model.canExecute,true);
  const r=createLayout(model,'4D'),regular=createLayout(model,'3D');assert.notDeepEqual(r.positions,regular.positions);
  for(const e of layoutEdges(model))if(r.topologyRanks.has(e.source))assert.ok(r.positions.get(e.source).x<=r.positions.get(e.target).x);
  const box=b(model.nodes.map(n=>r.positions.get(n.key)));assert.ok(['x','y','z'].every(a=>box[a][1]>box[a][0]));
@@ -70,8 +71,8 @@ test('automatic chooses only the five defined modes and the lowest candidate sco
  const model=fixture(),auto=createLayout(model,'auto');assert.ok(LAYOUT_MODES.slice(1).includes(auto.mode));for(const mode of LAYOUT_MODES.slice(1))assert.ok(auto.metrics.score<=createLayout(model,mode).metrics.score+1e-9);
  if(auto.mode==='1D')assert.deepEqual(auto.positions,createLayout(model,'1D').positions);
 });
-test('omitting the layout mode selects 4D topology rather than automatic selection',()=>{
- const model=fixture(),layout=createLayout(model);assert.equal(layout.mode,'4D');assert.equal(layout.requestedMode,'4D');assert.equal(layout.automatic,undefined);assert.deepEqual(layout.positions,createLayout(model,'4D').positions);
+test('omitting the layout mode selects configured 5D topology',()=>{
+ const model=fixture(),layout=createLayout(model);assert.equal(layout.mode,'5D');assert.equal(layout.requestedMode,'5D');assert.equal(layout.automatic,undefined);assert.deepEqual(layout.positions,createLayout(model,'5D').positions);
 });
 test('layout changes leave model, q and queued execution unchanged',()=>{
  const e=new JKEngine(fixture());e.send(Object.fromEntries(e.model.inputs.map(k=>[k,0])));const before={length:e.length,item:e.itemAt(0),q:[...e.latest],model:structuredClone(e.model)};

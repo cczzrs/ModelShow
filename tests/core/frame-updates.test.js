@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {FrameUpdates} from '../../src/core/frame-updates.js';
-import {JKEngine,compileModel} from '../../src/core/engine.js';
-import {Playback} from '../../src/core/playback.js';
+import {FrameUpdates} from '../../src/ui/frame-updates.js';
+import {JKEngine,compileModel} from '../../src/jk/engine.js';
+import {Playback} from '../../src/ui/playback.js';
 
-const constantModel=()=>compileModel({nodes:Array.from({length:10},(_,i)=>({id:`Q${i}`,ex:'J0K1'})),initial_q:{0:[],1:[]},q_y:[]});
+const inputModel=()=>compileModel({nodes:[{id:'Q0',ex:'J0K(X0)'}],initial_q:{0:['Q0'],1:[]},q_y:[{Y0:'Q0'}]});
+const queued=()=>{const e=new JKEngine(inputModel());for(let i=0;i<10;i++)e.send({X0:i%2});return e;};
 
 test('each execution is observed immediately while callbacks and status changes share one frame refresh',()=>{
-  const engine=new JKEngine(constantModel()),observed=[],draws=[];
-  const frames=new FrameUpdates(()=>draws.push(engine.total),event=>{if(event?.type==='execution')observed.push([event.ticket,engine.total]);});
+  const engine=queued(),observed=[],draws=[];
+  const frames=new FrameUpdates(()=>draws.push(engine.total),event=>{if(event?.executions?.length)observed.push([event.ticket,engine.total]);});
   const playback=new Playback(engine,{onChange:event=>frames.request(event),now:()=>0});
   playback.skip=true;
   playback.tick(1/60);
@@ -27,13 +28,13 @@ test('each execution is observed immediately while callbacks and status changes 
 });
 
 test('completed state is still flushed after a synchronous event observer fails',()=>{
-  const engine=new JKEngine(constantModel()),draws=[];
+  const engine=queued(),draws=[];
   const frames=new FrameUpdates(()=>draws.push(engine.total),event=>{if(event?.total===3)throw new Error('observer failed');});
   const playback=new Playback(engine,{onChange:event=>frames.request(event),now:()=>0});
   playback.skip=true;
   assert.throws(()=>playback.tick(1/60),/observer failed/);
   assert.equal(engine.total,3);
-  assert.equal(engine.itemAt(0).node.id,'Q3');
+  assert.equal(engine.itemAt(0).node,'Q0');
   playback.pause();
   assert.equal(frames.flush(),true);
   assert.deepEqual(draws,[3]);

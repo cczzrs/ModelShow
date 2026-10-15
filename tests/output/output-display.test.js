@@ -1,14 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three/webgpu';
-import {defaultDisplay,validateDisplay,loadDisplay,channelsOf,convertPixel,parseBrightness,evaluateChannel,DisplayState,batchDisplay,resizeDisplay,exportDisplayModel,displayConnections} from '../../src/output/output-display.js';
-import {OutputBoard} from '../../src/output/output-board.js';
-import {compileModel,JKEngine} from '../../src/core/engine.js';
-import {Playback} from '../../src/core/playback.js';
+import {defaultDisplay,validateDisplay,loadDisplay,channelsOf,convertPixel,parseBrightness,evaluateChannel,DisplayState,batchDisplay,resizeDisplay,displayConnections} from '../../src/ui/output-display.js';
+import {OutputBoard} from '../../src/scene/output-board.js';
+import {compileModel,JKEngine} from '../../src/jk/engine.js';
+import {Playback} from '../../src/ui/playback.js';
+import {serializeModel} from '../../src/jk/model-schema.js';
 const bits=(ids,order='lsb-first',mapping='scale')=>({kind:'bits',bits:ids,order,mapping});
 const values=(...v)=>new Map(v.map((b,i)=>['Y'+i,b]));
 const bound={min:{x:-3,y:-2,z:-1},max:{x:3,y:2,z:1}};
 const visuals=()=>new Map([['Y0',{type:'Y',mesh:{position:new THREE.Vector3(3,1,0)}}]]);
+const snapshot=()=>serializeModel({name:'a',nodes:[{id:'Q0',ex:'J0K(X0)'}],initial_q:{0:['Q0'],1:[]},q_y:[{Y0:'Q0'}]});
 test('bit order, reorder, 64-bit exact decimal values and normalized rounding',()=>{
  assert.equal(evaluateChannel(bits(['Y0','Y1','Y2','Y3']),values(1,0,1,0)).value,'5');
  assert.equal(evaluateChannel(bits(['Y0','Y1','Y2','Y3'],'msb-first'),values(1,0,1,0)).value,'10');
@@ -28,26 +30,31 @@ test('missing and invalid output bits turn off only the affected channel; repeat
  assert.deepEqual(state.update(values(1,null,1)),[]);assert.deepEqual(state.update(values(1,0,1)),[0]);assert.equal(state.results[0].r.brightness,85);assert.equal(evaluateChannel(bits(['Y100']),values()).ready,false);
 });
 test('batch allocation is row major, validates supply and keeps per-light overrides across resizing',()=>{
- const outputs=Array.from({length:24},(_,i)=>({id:'Y'+i}));const c=batchDisplay(defaultDisplay(2,2),{start:'Y0',width:2},outputs);assert.deepEqual(c.pixels[1].channels.r.bits,['Y6','Y7']);assert.deepEqual(c.pixels[3].channels.b.bits,['Y22','Y23']);assert.throws(()=>batchDisplay(c,{start:'Y1',width:2},outputs),/不会重复/);
+ const outputs=Array.from({length:24},(_,i)=>({id:'Y'+i}));const c=batchDisplay(defaultDisplay(2,2),{start:'Y0',width:2,gray:false},outputs);assert.deepEqual(c.pixels[1].channels.r.bits,['Y6','Y7']);assert.deepEqual(c.pixels[3].channels.b.bits,['Y22','Y23']);assert.throws(()=>batchDisplay(c,{start:'Y1',width:2,gray:false},outputs),/不会重复/);
  const gray=batchDisplay(defaultDisplay(1,2),{start:'Y0',width:1,gray:true},outputs);assert.deepEqual(gray.pixels[0].channels.r.bits,gray.pixels[0].channels.b.bits);
  c.pixels[3].channels.r={kind:'fixed',value:42};assert.equal(resizeDisplay(c,3,3).pixels[4].channels.r.value,42);
 });
-test('configuration import isolates errors; export preserves all original model fields and hash',()=>{
- const raw={name:'a',md5:'original',nodes:[],initial_q:{0:[],1:[]},q_y:[],custom:{foo:42}},c=defaultDisplay(1,1);c.enabled=true;
- const exported=exportDisplayModel(raw,c);assert.equal(exported.md5,raw.md5);assert.deepEqual(exported.custom,raw.custom);assert.ok(!('outputDisplay'in raw));assert.deepEqual(loadDisplay(JSON.parse(JSON.stringify(exported)).outputDisplay).config,c);assert.equal(loadDisplay(undefined).config.enabled,false);
+test('independent board configuration import isolates errors and preserves applied values',()=>{
+ const raw=snapshot(),c=defaultDisplay(1,1);c.enabled=true;
+ assert.deepEqual(loadDisplay(JSON.parse(JSON.stringify(c))).config,c);assert.equal(loadDisplay(undefined).config.enabled,false);
  for(const bad of [{...c,version:2},{...c,rows:33},{...c,pixels:[]},{...c,enabled:'yes'}]){assert.equal(loadDisplay(bad).config.enabled,false);assert.ok(loadDisplay(bad).error);}
  assert.throws(()=>validateDisplay({...c,pixels:[{mode:'packed',bits:['Y0'],widths:{r:1,g:1,b:1},order:'lsb-first',mapping:'scale'}]}));
 });
-test('screen scale is optional in legacy v1, validated, and retained through resize, bulk binding and export',()=>{
- const c=defaultDisplay(1,1),legacy=structuredClone(c);delete legacy.scale;assert.equal(validateDisplay(legacy).scale,1);
+test('screen scale is required, validated, and retained through resize, bulk binding and export',()=>{
+ const c=defaultDisplay(1,1),legacy=structuredClone(c);delete legacy.scale;assert.throws(()=>validateDisplay(legacy));
  for(const scale of [.25,1,2.5,8]){
   const config=validateDisplay({...c,scale}),resized=resizeDisplay(config,2,2),batch=batchDisplay(resized,{start:'Y0',width:1,gray:true},Array.from({length:4},(_,i)=>({id:'Y'+i})));
-  assert.equal(resized.scale,scale);assert.equal(batch.scale,scale);assert.equal(loadDisplay(JSON.parse(JSON.stringify(exportDisplayModel({md5:'unchanged'},batch))).outputDisplay).config.scale,scale);
+  assert.equal(resized.scale,scale);assert.equal(batch.scale,scale);assert.equal(loadDisplay(JSON.parse(JSON.stringify(batch))).config.scale,scale);
  }
  for(const scale of [0,.24,8.01,NaN,Infinity,null,'2']){const loaded=loadDisplay({...c,enabled:true,scale});assert.ok(loaded.error);assert.equal(loaded.config.enabled,false);}
 });
-test('actual FIFO, partial send, paused step, repeated values and reset project current Yi without extra events',()=>{
- const model=compileModel({nodes:[{id:'Q0',ex:'J0K(X0)'},{id:'Q1',ex:'J0K(X1)'}],initial_q:{0:[],1:[]},q_y:[{Y0:'Q0'},{Y1:'Q1'}]}),engine=new JKEngine(model),c=defaultDisplay(1,1);c.pixels[0].channels.r=bits(['Y0','Y1']);const state=new DisplayState(c,model.outputs);const p=new Playback(engine,{onChange:()=>state.update(engine.outputs)});p.pause();p.send({X0:1});assert.equal(engine.total,0);p.step();assert.equal(state.results[0].r.ready,false);p.send({X1:0});p.step();assert.equal(state.results[0].r.brightness,85);assert.equal(engine.total,2);p.send({X0:1,X1:0});p.step();p.step();assert.equal(state.results[0].r.brightness,85);assert.equal(engine.total,4);p.reset();assert.equal(state.results[0].r.ready,false);assert.equal(state.results[0].r.brightness,0);
+test('Yi remains unavailable until each bound Q publishes and resets without fake outputs',()=>{
+ const model=compileModel({nodes:[{id:'Q0',ex:'J0K(X0)'},{id:'Q1',ex:'J0K(X1)'}],initial_q:{0:['Q0','Q1'],1:[]},q_y:[{Y0:'Q0'},{Y1:'Q1'}]}),engine=new JKEngine(model),c=defaultDisplay(1,1);
+ c.pixels[0].channels.r=bits(['Y0','Y1']);const state=new DisplayState(c,model.outputs),p=new Playback(engine,{onChange:()=>state.update(engine.outputs)});
+ p.pause();p.send({X0:1});assert.equal(engine.total,0);p.step();assert.equal(state.results[0].r.ready,false);
+ p.send({X1:0});while(engine.length)p.step();assert.equal(engine.total,2);
+ p.send({X0:1,X1:0});while(engine.length)p.step();assert.equal(engine.total,4);assert.equal(state.results[0].r.brightness,85);
+ p.reset();assert.equal(state.results[0].r.ready,false);assert.equal(state.results[0].r.brightness,0);
 });
 test('deduplication is per Yi/lamp/channel, not across channels or lamps',()=>{
  const c=defaultDisplay(1,2);c.pixels[0].channels.r=bits(['Y0','Y0']);c.pixels[0].channels.g=bits(['Y0']);c.pixels[1].channels.r=bits(['Y0']);assert.equal(displayConnections(c).length,3);

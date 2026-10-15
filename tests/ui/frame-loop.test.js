@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mainSource,sourceFunction} from '../helpers/ui-harness.js';
-import {FrameUpdates} from '../../src/core/frame-updates.js';
-import {Playback} from '../../src/core/playback.js';
-import {compileModel,JKEngine} from '../../src/core/engine.js';
+import {FrameUpdates} from '../../src/ui/frame-updates.js';
+import {Playback} from '../../src/ui/playback.js';
+import {compileModel,JKEngine} from '../../src/jk/engine.js';
 
 // Exercise the actual browser-loop functions without constructing its DOM or GPU.
 const createFrame=new Function('playback','message','frameUpdates','view','engine','requestAnimationFrame',`
@@ -13,7 +13,7 @@ const createFrame=new Function('playback','message','frameUpdates','view','engin
   return frame;
 `);
 function setup({nodes=[],sync=()=>{},refresh=()=>{},render=()=>{},fail=()=>{}}={}){
-  const engine=new JKEngine(compileModel({nodes,initial_q:{0:[],1:[]},q_y:[]}));
+  const engine=new JKEngine(compileModel({nodes,initial_q:{0:nodes.length?['Q0']:[],1:[]},q_y:nodes.length?[{Y0:'Q0'}]:[]}));
   const messages=[],scheduled=[],presented=[];
   const frames=new FrameUpdates(()=>{presented.push(engine.total);refresh();sync();},()=>sync());
   const playback=new Playback(engine,{onChange:event=>frames.request(event),now:()=>0});playback.skip=true;
@@ -22,9 +22,10 @@ function setup({nodes=[],sync=()=>{},refresh=()=>{},render=()=>{},fail=()=>{}}={
 }
 
 test('persistent output observer failure pauses completed work, reports errors and retains the next animation frame',()=>{
-  const state=setup({nodes:[{id:'Q0',ex:'J0K1'},{id:'Q1',ex:'J0K1'}],sync(){throw new Error('persistent observer failure');}});
+  const state=setup({nodes:[{id:'Q0',ex:'J0K(X0)'}],sync(){throw new Error('persistent observer failure');}});
+  state.engine.send({X0:1});
   assert.doesNotThrow(()=>state.frame(16));
-  assert.equal(state.engine.total,1);assert.equal(state.engine.length,1);assert.equal(state.playback.running,false);
+  assert.equal(state.engine.total,1);assert.equal(state.engine.length,0);assert.equal(state.playback.running,false);
   assert.equal(state.frames.pending,true);assert.equal(state.scheduled.length,1);assert.equal(state.scheduled[0],state.frame);
   assert.deepEqual(state.presented,[1]);assert.equal(state.messages.length,2);
   assert.match(state.messages[0].text,/执行错误：persistent observer failure/);

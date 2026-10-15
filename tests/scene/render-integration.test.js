@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three/webgpu';
 import {NetworkView} from '../../src/scene/view.js';
-import {compileModel,JKEngine} from '../../src/core/engine.js';
+import {compileModel,JKEngine} from '../../src/jk/engine.js';
 import {createLayout} from '../../src/scene/layout.js';
 import {disposeGroup} from '../../src/scene/resources.js';
+import {defaultDisplay} from '../../src/ui/output-display.js';
 
 function setup(t){
   const oldDocument=globalThis.document,oldWorker=globalThis.Worker;
@@ -12,7 +13,7 @@ function setup(t){
   globalThis.document={hidden:false,createElement(){return {width:0,height:0,getContext:()=>context};}};
   globalThis.Worker=class {postMessage(message){this.message=message;}terminate(){this.terminated=true;}};
   let now=0; t.mock.method(performance,'now',()=>now);
-  const model=compileModel({nodes:[{id:'Q0',ex:'J0K(X0)'},{id:'Q1',ex:'J0K(Q0)'},{id:'Q2',ex:'J(Q0)K(Q2)'}],initial_q:{0:['Q2'],1:[]},q_y:[{Y0:'Q1'}]});
+  const model=compileModel({nodes:[{id:'Q0',ex:'J0K(X0)'},{id:'Q1',ex:'J0K(Q0)'},{id:'Q2',ex:'J(Q0)K(Q2)'}],initial_q:{0:['Q0','Q2'],1:[]},q_y:[{Y0:'Q1'},{Y1:'Q2'}]});
   const view=new NetworkView({closest:()=>null}),engine=new JKEngine(model),draws=[];
   view.setModel(model);view.refresh(engine);view.available=true;
   view.controls={target:new THREE.Vector3(),update(){},dispose(){},minDistance:.2,maxDistance:200};
@@ -113,4 +114,64 @@ test('renderer recovery retains batch and atlas identities, values, selection an
   assert.equal(view.selected,state.selected);assert.equal(view.engine,engine);
   assert.deepEqual([...view.camera.position.toArray(),...view.camera.quaternion.toArray(),...view.camera.up.toArray(),...view.controls.target.toArray()],state.camera);
   const wind=view.edgeTime;draw(1000,true);assert.equal(view.edgeTime,wind,'GPU downtime must not advance the first recovered wind frame');
+});
+
+test('GPU failure switches once to Canvas and retains queued work, output lamps, signals and camera despite cleanup failure',async t=>{
+  const {view,model,engine,draw}=setup(t),errors=[];
+  engine.send({X0:1});while(engine.length)engine.step();
+  const pendingInput=engine.send({X0:0});view.refresh(engine);
+  const config=defaultDisplay(1,1);config.enabled=true;
+  config.pixels[0].channels.r={kind:'bits',bits:['Y0'],order:'lsb-first',mapping:'scale'};
+  view.setOutputDisplay(config);view.select('lamp:0');view.showTransfers(pendingInput.transfers);view.progress(.5);
+  draw(0,false);
+  view.camera.position.set(9,3,15);view.camera.up.set(1,0,0);view.camera.lookAt(1,2,0);view.controls.target.set(1,2,0);
+  view.controls.minDistance=1.25;view.controls.maxDistance=81;
+  const camera=()=>[...view.camera.position.toArray(),...view.camera.quaternion.toArray(),...view.camera.up.toArray(),...view.controls.target.toArray()];
+  const state={model:view.model,batches:view.batches,labels:view.labels,output:view.outputState,lamps:view.outputBoard.lamps,
+    lampColors:[...view.outputBoard.lamps.instanceColor.array],signals:view.signals,camera:camera(),capture:engine.capture(),
+    outputs:[...engine.outputs],history:[...engine.history],total:engine.total,selected:view.selected};
+  let finish,initializations=0,disposals=0,removals=0;
+  const ready=new Promise(resolve=>{finish=resolve;});
+  const controls=view.controls,renderer=view.renderer;
+  renderer.dispose=()=>{disposals++;throw new Error('lost device cleanup failed');};
+  renderer.domElement.remove=()=>removals++;
+  view.backend='webgpu';view.onError=error=>errors.push(error);
+  view.init=async options=>{
+    initializations++;assert.deepEqual(options,{mode:'canvas'});await ready;
+    view.controls={...controls,target:new THREE.Vector3(),minDistance:.2,maxDistance:200};
+    view.renderer={...renderer,dispose(){},domElement:{remove(){}}};view.backend='canvas';view.available=true;
+    view.camera.position.set(0,0,0);view.camera.up.set(0,1,0);view.camera.quaternion.identity();
+  };
+  const first=view.fail(new Error('GPU lost'));
+  assert.equal(view.available,false);assert.equal(view.renderer,null);
+  assert.equal(view.fail(new Error('same device lost again')),first,'simultaneous loss paths share one recovery');
+  assert.equal(initializations,1);assert.equal(disposals,1);assert.equal(removals,1);
+  finish();await first;
+  assert.equal(view.backend,'canvas');assert.equal(view.available,true);assert.equal(view.fallbackPending,null);assert.deepEqual(errors,[]);
+  assert.equal(view.model,model);assert.equal(view.model,state.model);assert.equal(view.engine,engine);
+  assert.equal(view.batches,state.batches);assert.equal(view.labels,state.labels);assert.equal(view.outputState,state.output);
+  assert.equal(view.outputBoard.lamps,state.lamps);assert.deepEqual([...view.outputBoard.lamps.instanceColor.array],state.lampColors);
+  assert.equal(view.signals,state.signals);assert.equal(view.signalProgress,.5);assert.equal(view.selected,state.selected);
+  assert.deepEqual(camera(),state.camera);assert.equal(view.controls.minDistance,1.25);assert.equal(view.controls.maxDistance,81);
+  assert.deepEqual(engine.capture(),state.capture);assert.deepEqual([...engine.outputs],state.outputs);
+  assert.deepEqual(engine.history,state.history);assert.equal(engine.total,state.total);
+  const wind=view.edgeTime;draw(1000,true);assert.equal(view.edgeTime,wind);
+});
+
+test('a failed software takeover reports one error and leaves execution state intact',async t=>{
+  const {view,engine}=setup(t),errors=[],error=new Error('Canvas unavailable');
+  engine.send({X0:1});const state=engine.capture();
+  view.backend='webgpu';view.onError=value=>errors.push(value);
+  let attempts=0;view.recover=async options=>{attempts++;assert.deepEqual(options,{mode:'canvas'});throw error;};
+  await view.fail(new Error('GPU lost'));
+  assert.equal(attempts,1);assert.deepEqual(errors,[error]);assert.equal(view.available,false);assert.equal(view.fallbackPending,null);
+  assert.equal(view.engine,engine);assert.deepEqual(engine.capture(),state);
+});
+
+test('Canvas rendering errors use the existing error handler without an automatic retry loop',t=>{
+  const {view}=setup(t),errors=[],error=new Error('Canvas draw failed');
+  t.mock.method(console,'error',()=>{});
+  view.backend='canvas';view.onError=value=>errors.push(value);
+  view.recover=()=>assert.fail('software failure must not retry indefinitely');
+  view.fail(error);assert.equal(view.available,false);assert.deepEqual(errors,[error]);
 });

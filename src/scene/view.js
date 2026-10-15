@@ -1,15 +1,16 @@
-import { APP_CONFIG } from '../config.js';
+import { APP_CONFIG } from '../../html/config.js';
 import * as THREE from 'three/webgpu';
-import { OutputBoard } from '../output/output-board.js';
-import { DisplayState, defaultDisplay } from '../output/output-display.js';
+import { OutputBoard } from './output-board.js';
+import { DisplayState, defaultDisplay } from '../ui/output-display.js';
 import { EditorControls } from './editor-controls.js';
-import { compareNodes } from '../core/node-id.js';
+import { compareNodes } from '../jk/node-id.js';
 import { createLayout, DEFAULT_LAYOUT_MODE } from './layout.js';
 import { disposeGroup } from './resources.js';
 import { FloatingEdgeCurve, assignEdgeLanes, updateTubeGeometry } from './edge-curves.js';
 import { NetworkBatches } from './network-batches.js';
 import { NodeLabels } from './node-labels.js';
 import { RenderSchedule } from './render-schedule.js';
+import { createRenderer, disposeRenderer } from './renderer-backend.js';
 const NODE_SIZE = .10;
 const TITLE_OFFSET = -.19, COUNT_OFFSET = -.36;
 // Find the last approach to the target box, including self-loop curves.
@@ -41,9 +42,10 @@ function label(text, color = '#a5bcd3', size = 22) {
   return sprite;
 }
 export class NetworkView {
-  constructor(container, onSelect, onError = () => {}, onLayout = () => {}) {
+  constructor(container, onSelect, onError = () => {}, onLayout = () => {}, onBackend = () => {}) {
     this.layoutMode=DEFAULT_LAYOUT_MODE; this.layoutGeneration=0; this.onLayout=onLayout;
     this.container = container; this.onSelect = onSelect; this.onError = onError; this.available = false;
+    this.onBackend = onBackend;
     this.scene = new THREE.Scene(); this.scene.fog = new THREE.FogExp2(0x0a1422, .012);
     this.camera = new THREE.PerspectiveCamera(42, 1, .1, 500);
     this.camera.position.set(12,8,18);this.camera.lookAt(0,0,0);
@@ -55,20 +57,24 @@ export class NetworkView {
     this.outputBoard=new OutputBoard(this.scene);this.outputState=new DisplayState(defaultDisplay());this.pendingLampDirty=new Set();
     this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
   }
-  async init() {
-    if (!navigator.gpu) throw new Error('浏览器没有提供 WebGPU 接口。请使用支持 WebGPU 的浏览器，通过 localhost 或 HTTPS 打开。');
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) throw new Error('未能获取可用的 GPU adapter。请检查浏览器硬件加速和设备支持。');
-    this.renderer = new THREE.WebGPURenderer({ antialias: true, alpha: true });
+  async init(options) {
+    let result = await createRenderer(this, options);
+    if (result.backend === 'webgpu' && result.renderer._isDeviceLost) {
+      disposeRenderer(result.renderer);
+      result = await createRenderer(this, { mode: 'canvas' });
+    }
+    this.renderer = result.renderer;this.backend = result.backend;this.fallbackReason = result.reason;
     const renderer = this.renderer;
-    const handleLoss = renderer.onDeviceLost.bind(renderer);
-    renderer.onDeviceLost = info => {
-      handleLoss(info);
-      if (this.renderer === renderer) this.fail(new Error(info.message || 'GPU 设备连接丢失'));
-    };
-    await renderer.init();
-    if (!this.renderer.backend.isWebGPUBackend) { this.renderer.dispose(); throw new Error('WebGPU 初始化失败，本应用没有自动切换到 WebGL。'); }
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    if (this.backend === 'webgpu') {
+      const handleLoss = renderer.onDeviceLost.bind(renderer);
+      renderer.onDeviceLost = info => {
+        handleLoss(info);
+        if (this.renderer === renderer) this.fail(new Error(info.message || 'GPU 设备连接丢失'));
+      };
+    }
+    const settings = APP_CONFIG.scene.renderer;
+    this.renderSchedule = new RenderSchedule(this.backend === 'canvas' ? settings.software : settings.gpu);
+    this.renderer.setPixelRatio(this.backend === 'canvas' ? settings.software.pixelRatio : Math.min(globalThis.devicePixelRatio || 1, settings.gpu.maxPixelRatio));
     this.renderer.setClearColor(0x091422, 0);
     this.container.append(this.renderer.domElement);
     this.controls = new EditorControls(this.camera, this.renderer.domElement,ndc=>{
@@ -88,18 +94,27 @@ export class NetworkView {
       if (!down || down.id!==e.pointerId || down.moved || e.button!==0 || Math.hypot(e.clientX-down.x,e.clientY-down.y)>5) return;
       const rect = this.renderer.domElement.getBoundingClientRect();
       this.pointer.set((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1);
+      this.camera.updateMatrixWorld();
       this.raycaster.setFromCamera(this.pointer,this.camera);
       const hit = this.raycaster.intersectObjects(this.pickObjects(),false)[0];
       this.onSelect(hit?.object.userData.outputLamp?`lamp:${hit.instanceId}`:hit?.object.userData.key ?? null);
     });
-    this.available = true; this.resize();
+    this.available = true; this.resize();this.onBackend(this.backend);
   }
   fail(error) {
     this.available = false;
+    if (this.fallbackPending) return this.fallbackPending;
+    if (this.backend === 'webgpu') {
+      // Keep the scene, execution state, camera and interactions while replacing only the renderer.
+      this.fallbackPending = this.recover({ mode: 'canvas' }).catch(fallbackError => {
+        this.available = false;this.onError(fallbackError);
+      }).finally(() => { this.fallbackPending = null; });
+      return this.fallbackPending;
+    }
     console.error('3D 渲染中断',error);
     this.onError(error);
   }
-  async recover() {
+  async recover(options) {
     this.available = false;
     this.resizeObserver?.disconnect();
     const target=this.controls?.target.clone(),position=this.camera.position.clone(),quaternion=this.camera.quaternion.clone(),up=this.camera.up.clone();
@@ -108,8 +123,8 @@ export class NetworkView {
     const old = this.renderer;
     this.renderer = null; // Ignore the old device's asynchronous loss callback.
     old?.domElement.remove();
-    old?.dispose();
-    await this.init();
+    disposeRenderer(old);
+    await this.init(options);
     this.renderSchedule.resetClock();
     this.camera.position.copy(position);this.camera.up.copy(up);this.camera.quaternion.copy(quaternion);
     if(target){this.controls.target.copy(target);this.controls.minDistance=limits.min;this.controls.maxDistance=limits.max;this.controls.update();}
@@ -118,7 +133,7 @@ export class NetworkView {
   resize() {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     if (!w || !h || !this.renderer) return;
-    this.camera.aspect = w/h; this.camera.updateProjectionMatrix(); this.renderer.setSize(w,h);this.controls?.handleResize();
+    this.camera.aspect = w/h; this.camera.updateProjectionMatrix(); this.renderer.setSize(w,h,false);this.controls?.handleResize();
     this.renderSchedule.invalidate();
   }
   resetCamera() {
@@ -256,8 +271,8 @@ export class NetworkView {
   select(key) {this.selected=key;this.outputBoard.select(key);this.refresh(this.engine);}
   syncOutputs(engine,event) {
     if(engine)this.engine=engine;
-    // Preserve every Yi publication in the projection while deferring GPU writes.
-    if(event&&!event.transfers?.some(t=>/^Y(?:0|[1-9]\d*)$/.test(t.target)))return;
+    // Yi consumes only published event data. GPU writes stay deferred.
+    if(event&&!event.outputChanges?.length&&!event.transfers?.some(t=>/^Y(?:0|[1-9]\d*)$/.test(t.target)))return;
     for(const index of this.outputState.update(this.engine?.outputs??new Map()))this.pendingLampDirty.add(index);
   }
   refresh(engine) {
@@ -299,7 +314,7 @@ export class NetworkView {
       const value=lookup.get(edge.source+'>'+edge.target);if(value===undefined)continue;
       const text=label(String(value),'#eefcf8',34);text.scale.set(1.5,.375,1);this.signalGroup.add(text);
       const tip=new THREE.Mesh(new THREE.ConeGeometry(.04,.11,8).translate(0,-.055,0),new THREE.MeshBasicMaterial({color:0xb4ffdf}));this.signalGroup.add(tip);
-      this.signals.push({edge,text,tip});
+      this.signals.push({edge,text,tip,value});
     }
     this.progress(0);
   }

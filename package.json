@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "api": "PORT=5174 node server/model-pool-server.js",
-    "start": "node server/model-pool-server.js",
-    "build": "node scripts/build.mjs",
-    "preview": "vite preview --host 127.0.0.1",
-    "test": "node scripts/run-tests.mjs"
+    "dev": "vite --config tools/vite.config.js --host 127.0.0.1",
+    "api": "PORT=5174 node html/server/model-pool-server.js",
+    "start": "node html/server/model-pool-server.js",
+    "build": "node tools/build.mjs",
+    "preview": "vite preview --config tools/vite.config.js --host 127.0.0.1",
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
     "three": "0.180.0"

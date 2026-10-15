@@ -1,27 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {compileModel} from '../../src/core/engine.js';
-import {parseModelPool, defaultPoolEntry, mutateModelPool} from '../../src/models/model-pool.js';
+import {serializeModel,compileSnapshot} from '../../src/jk/model-schema.js';
+import {compileModel} from '../../src/jk/engine.js';
+import {parseModelPool, defaultPoolEntry, mutateModelPool} from '../../src/jk/model-pool.js';
+import {defaultDisplay} from '../../src/ui/output-display.js';
 
 const dates = ['2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z', '2026-09-03T00:00:00.000Z'];
-const model = () => ({name: '原始模型', md5: 'keep-original-md5', nodes: [{id: 'Q2Label', ex: ' J0 K(X0) '}], initial_q: {0: [], 1: []}, q_y: [{Y0: 'Q2Label'}], custom: {nested: [1, false, null]}});
+const model = () => serializeModel({name: '原始模型', nodes: [{id: 'Q0', ex: 'J0K(X0)'}], initial_q: {0: ['Q0'], 1: []}, q_y: [{Y0: 'Q0'}]}, {createdAt:'2026-10-02T00:1790899200000000000'});
 const entry = (id, time = dates[0], permanent = false) => ({id, createdAt: time, promotedAt: permanent ? time : null, model: model()});
 const empty = () => ({version: 1, revision: 0, temporary: [], permanent: []});
 const freeze = value => { if (value && typeof value === 'object') { Object.freeze(value); Object.values(value).forEach(freeze); } return value; };
 const status = expected => error => error.status === expected && typeof error.message === 'string';
 
-test('legacy example becomes a permanent seed while every raw model field and MD5 survive', () => {
-  const raw = freeze({...model(), version: 42, outputDisplay: {invalidButPreserved: true}});
-  const pool = parseModelPool(raw);
-  assert.equal(pool.version, 1);
-  assert.equal(pool.revision, 0);
-  assert.deepEqual(pool.temporary, []);
-  assert.equal(pool.permanent[0].id, 'example');
-  assert.equal(pool.permanent[0].createdAt, '1970-01-01T00:00:00.000Z');
-  assert.equal(pool.permanent[0].promotedAt, pool.permanent[0].createdAt);
-  assert.deepEqual(pool.permanent[0].model, raw);
-  assert.notEqual(pool.permanent[0].model.nodes, raw.nodes);
-  assert.equal(defaultPoolEntry(pool), pool.permanent[0]);
+test('single legacy seed and old snapshots are rejected without rewriting data', () => {
+ const raw=freeze(model());assert.throws(()=>parseModelPool(raw),status(400));
+ const old={...model(),format:'jk-logic-structure-V3.1.0'};
+ assert.throws(()=>parseModelPool({...empty(),permanent:[{...entry('old',dates[0],true),model:old}]}),status(400));
+ assert.throws(()=>mutateModelPool(empty(),{revision:0,action:'import',model:old}),status(400));
 });
 
 test('latest permanent promotion is preferred over newer temporary imports, with array-order tie breaks', () => {
@@ -77,22 +72,33 @@ test('pool parsing and every mutation clone nested models without altering input
     mutateModelPool(source, {action: 'delete', revision: 0, id: 't'}),
   ]) {
     assert.notEqual(result.pool, source);
-    result.pool.permanent[0].model.custom.nested[0] = 99;
+    result.pool.permanent[0].model.nodes[0].ex = "changed";
     assert.equal(JSON.stringify(source), before);
   }
   assert.deepEqual(raw, model());
 });
 
-test('node-level errors remain importable and top-level invalid models are rejected', () => {
-  const anomalous = {...model(), nodes: [{id: 'invalid', ex: '?'}, {id: 'Q2', ex: 'J0K(Q404)'}, null], q_y: [{Y0: 'Q404'}]};
-  const result = mutateModelPool(empty(), {revision: 0, action: 'import', model: anomalous}, {id: 'errors', now: dates[0]});
-  assert.equal(compileModel(result.pool.temporary[0].model).valid.length, 0);
-  for (const invalid of [null, [], {}, {...model(), nodes: {}}, {...model(), q_y: {}}, {...model(), initial_q: {0: []}}]) {
-    assert.throws(() => parseModelPool(invalid), status(400));
-    assert.throws(() => mutateModelPool(empty(), {revision: 0, action: 'import', model: invalid}), status(400));
-  }
+test('model pool import, promotion and JSON reload preserve the embedded board independently',()=>{
+ const raw=model();raw.display.outputBoard=defaultDisplay(1,2);raw.display.outputBoard.enabled=true;
+ raw.display.outputBoard.pixels[1].channels.b={kind:'bits',bits:['Y0'],order:'lsb-first',mapping:'scale'};
+ const imported=mutateModelPool(empty(),{revision:0,action:'import',model:raw},{id:'board',now:dates[0]});
+ const promoted=mutateModelPool(imported.pool,{revision:1,action:'promote',id:'board'},{now:dates[1]});
+ const restored=parseModelPool(JSON.parse(JSON.stringify(promoted.pool)));
+ assert.deepEqual(defaultPoolEntry(restored).model,raw);
+ restored.permanent[0].model.display.outputBoard.pixels[1].channels.b.bits.push('Y1');
+ assert.deepEqual(promoted.pool.permanent[0].model,raw);
+ assert.deepEqual(imported.pool.temporary[0].model,raw);
+ const invalid=structuredClone(raw);invalid.display.outputBoard.rows=0;
+ assert.throws(()=>mutateModelPool(empty(),{revision:0,action:'import',model:invalid}),status(400));
 });
 
+test('public pool rejects illegal nodes, incomplete snapshots and bad metadata without mutation',()=>{
+ const anomalous={...model(),nodes:[{id:'Q0',ex:'J0'}]},emptyPool=empty();
+ for(const invalid of [anomalous,null,[],{}, {...model(),nodes:{}}, {...model(),q_y:{}}, {...model(),initial_q:{0:[]}}, {...model(),md5:'0'.repeat(32)}]){
+  assert.throws(()=>parseModelPool(invalid),status(400));assert.throws(()=>mutateModelPool(emptyPool,{revision:0,action:'import',model:invalid}),status(400));
+ }
+ assert.deepEqual(emptyPool,empty());
+});
 test('pool schema rejects unsupported versions, revisions, missing groups, duplicate IDs and invalid dates', () => {
   const invalid = [
     {...empty(), version: 2}, {...empty(), revision: -1}, {...empty(), revision: 0.5}, {...empty(), revision: Number.MAX_SAFE_INTEGER + 1},
@@ -141,9 +147,7 @@ test('non-JSON values are rejected rather than silently losing raw model fields'
   const circular = model(); circular.self = circular;
   assert.throws(() => parseModelPool(circular), status(400));
   const shared = {deep: [1]};
-  assert.deepEqual(parseModelPool({...model(), a: shared, b: shared}).permanent[0].model.a, shared, 'shared references are not cycles');
-  const special = JSON.parse('{"__proto__":{"keep":"raw"},"constructor":"custom"}');
-  const preserved = parseModelPool({...model(), custom: special}).permanent[0].model.custom;
-  assert.deepEqual(preserved, special);
-  assert.equal(Object.getPrototypeOf(preserved), Object.prototype);
+  const pool=parseModelPool({...empty(),a:shared,b:shared});
+  assert.deepEqual(pool.a,pool.b,'shared pool metadata references are not cycles');
+  assert.notEqual(pool.a,shared);
 });

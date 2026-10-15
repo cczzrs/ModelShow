@@ -1,8 +1,8 @@
 // Development-only, bounded WebGPU benchmark. No engine events are executed.
-import {compileModel} from '../../src/core/engine.js';
+import {compileModel} from '../../src/jk/engine.js';
 import {NetworkView} from '../../src/scene/view.js';
 const params=new URLSearchParams(location.search);
-const raw={name:'896 nodes / 3136 edges',nodes:Array.from({length:768},(_,i)=>({id:`Q${i}`,ex:`J0K(X${i%64})K(X${(i+1)%64})J(${i?'Q'+(i-1):'X2'})K(${i>1?'Q'+(i-2):'X3'})`})),initial_q:{0:[],1:[]},q_y:Array.from({length:64},(_,i)=>({['Y'+i]:'Q'+(704+i)}))};
+const raw={name:'V4 rendering fixture',nodes:Array.from({length:768},(_,i)=>({id:`Q${i}`,ex:i<64?`J0K(X${i})`:`J0K(Q${i-1})K(Q${i%64})J(Q${(i+1)%64})K(Q${(i+2)%64})`})),initial_q:{0:Array.from({length:64},(_,i)=>`Q${i}`),1:[]},q_y:Array.from({length:64},(_,i)=>({['Y'+i]:'Q'+(704+i)}))};
 const view=new NetworkView(document.querySelector('#viewport'),()=>{});
 view.requestLayout=()=>{};
 const output=document.querySelector('#result');

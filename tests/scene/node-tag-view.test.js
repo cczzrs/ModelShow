@@ -1,44 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {inspectorHarness} from '../helpers/ui-harness.js';
-import {compileModel,JKEngine} from '../../src/core/engine.js';
-import {displayNodeId} from '../../src/core/node-id.js';
+import {compileModel,JKEngine} from '../../src/jk/engine.js';
+import {displayNodeId} from '../../src/jk/node-id.js';
 import {createLayout,LAYOUT_MODES} from '../../src/scene/layout.js';
 import {NetworkView} from '../../src/scene/view.js';
 import {disposeGroup} from '../../src/scene/resources.js';
 
 const raw={
   nodes:[
-    {id:'Q9007199254740993',ex:'J0K(Q10)'},
-    {id:'Q10',ex:'J0K(Q2)'},
-    {id:'Q2',ex:'J0K(X0)'},
-    {id:'Q9007199254740992',ex:'J0K(Q10)K(Q9007199254740993)'},
+    {id:'Q0',ex:'J0K(X0)'},
+    {id:'Q1',ex:'J0K(Q0)'},
+    {id:'Q2',ex:'J0K(Q1)'},
+    {id:'Q3',ex:'J0K(Q1)K(Q2)'},
   ],
-  initial_q:{0:[],1:[]},q_y:[{Y0:'Q9007199254740992'}],
+  initial_q:{0:['Q0'],1:[]},q_y:[{Y0:'Q3'}],
 };
-function taggedModel(legacy=false){
-  const next=structuredClone(raw);
-  const tags=new Map(next.nodes.map((n,i)=>[n.id,`L${3-i}B7`]));
-  for(const node of next.nodes){
-    const tag=tags.get(node.id);
-    if(legacy)node.id+=tag;else node.tag=tag;
-    node.ex=node.ex.replace(/Q\d+/g,id=>id+tags.get(id));
-  }
-  if(legacy)next.q_y[0].Y0+=tags.get(next.q_y[0].Y0);
-  return compileModel(next);
-}
-
-test('tags and legacy suffixes preserve every layout and numeric order beyond Number precision',()=>{
-  const plain=compileModel(raw),tagged=taggedModel(),legacy=taggedModel(true);
-  assert.equal(tagged.valid.length,4);assert.equal(legacy.valid.length,4);
+test('V4 fixed identities preserve deterministic layout and numeric order',()=>{
+  const plain=compileModel(raw),tagged=compileModel(structuredClone(raw));
+  assert.equal(tagged.valid.length,4);
   for(const mode of LAYOUT_MODES){
     const expected=createLayout(plain,mode);
     assert.deepEqual(createLayout(tagged,mode),expected);
-    assert.deepEqual(createLayout(legacy,mode),expected);
   }
-  const vertical=createLayout(legacy,'1D');
-  const sorted=[...legacy.nodes].sort((a,b)=>vertical.positions.get(b.key).y-vertical.positions.get(a.key).y);
-  assert.deepEqual(sorted.map(n=>n.id),['Q2','Q10','Q9007199254740992','Q9007199254740993']);
+  const vertical=createLayout(tagged,'1D');
+  const sorted=[...tagged.nodes].sort((a,b)=>vertical.positions.get(b.key).y-vertical.positions.get(a.key).y);
+  assert.deepEqual(sorted.map(n=>n.id),['Q0','Q1','Q2','Q3']);
 });
 
 function setupView(t,model){
@@ -57,9 +44,9 @@ function setupView(t,model){
   return view;
 }
 
-test('scene labels retain tags across layouts while selection and propagation use canonical IDs',t=>{
-  const model=taggedModel(true),view=setupView(t,model),engine=new JKEngine(model);
-  const selected=model.nodes.find(n=>n.id==='Q10'),camera=view.camera.position.toArray();
+test('scene labels use fixed IDs across layouts and event selection',t=>{
+  const model=compileModel(structuredClone(raw)),view=setupView(t,model),engine=new JKEngine(model);
+  const selected=model.nodes.find(n=>n.id==='Q1'),camera=view.camera.position.toArray();
   view.refresh(engine);view.select(selected.key);
   for(const mode of LAYOUT_MODES){
     view.applyLayout(createLayout(model,mode));
@@ -69,46 +56,46 @@ test('scene labels retain tags across layouts while selection and propagation us
       assert.equal(visual.mesh.userData.key,node.key);
     }
     assert.deepEqual(view.camera.position.toArray(),camera);
-    for(const edge of view.edges)assert.equal(!!edge.highlight?.visible,edge.source==='Q10'||edge.targetKey===selected.key);
+    for(const edge of view.edges)assert.equal(!!edge.highlight?.visible,edge.source==='Q1'||edge.targetKey===selected.key);
   }
-  view.available=true;view.showTransfers([{source:'Q10',target:'Q9007199254740993',value:1}]);
+  view.available=true;view.showTransfers([{source:'Q1',target:'Q2',value:1}]);
   assert.equal(view.signals.length,1);assert.ok(view.edges.every(e=>!/L\dB7/.test(e.source+e.target)));
 });
 
-test('duplicate fixed IDs keep each invalid node own display label and selection key',t=>{
-  const model=compileModel({nodes:[{id:'Q215L9B7',ex:'J0K1'},{id:'Q215L9B8',ex:'J0K1'}],initial_q:{0:[],1:[]},q_y:[]});
+test('duplicate fixed IDs retain separate diagnostic rows and selection keys',t=>{
+  const model=compileModel({nodes:[{id:'Q0',tag:'L9B7',ex:'J0K(X0)'},{id:'Q0',tag:'L9B8',ex:'J0K(X0)'}],initial_q:{0:[],1:[]},q_y:[]});
   const view=setupView(t,model);
   assert.equal(model.valid.length,0);
-  assert.deepEqual([...view.visuals.values()].map(v=>v.title.text),['Q215L9B7','Q215L9B8']);
-  assert.equal(new Set([...view.visuals.values()].map(v=>v.mesh.userData.key)).size,2);
-  assert.equal(displayNodeId(model,'Q215'),'Q215','ambiguous references must not borrow either tag');
+  const rows=model.nodes.map(node=>view.visuals.get(node.key));
+  assert.deepEqual(rows.map(v=>v.title.text),['Q0','Q0']);
+  assert.equal(new Set(rows.map(v=>v.mesh.userData.key)).size,2);
+  assert.equal(displayNodeId(model,'Q0'),'Q0','ambiguous references must not borrow either tag');
 });
 
 // Run the actual inspector against the fixed panel elements in index.html.
-test('inspector shows fixed ID and tag separately even when a tagged node is invalid', () => {
-  const model = compileModel({nodes: [{id: 'Q215L9B7', ex: 'J0K(MISSING)'}], initial_q: {0: [], 1: []}, q_y: []});
+test('inspector reports forbidden tag metadata without rendering it as an identity', () => {
+  const model = compileModel({nodes: [{id: 'Q0', tag:'L9B7', ex: 'J0K(MISSING)'}], initial_q: {0: [], 1: []}, q_y: []});
   const engine = new JKEngine(model);
   const { $, render } = inspectorHarness(model, engine, model.nodes[0].key, displayNodeId);
   render();
-  assert.equal($('selected-id').textContent, 'Q215L9B7');
+  assert.equal($('selected-id').textContent, 'Q0');
   assert.equal($('inspector-jk').hidden, false);
-  assert.equal($('inspector-fixed-id').textContent, 'Q215');
-  assert.equal($('inspector-tag').textContent, 'L9B7');
+  assert.equal($('inspector-fixed-id').textContent, 'Q0');
   assert.equal($('inspector-expression').textContent, 'J0K(MISSING)');
   assert.match($('inspector-jk').textContent, /固定 ID/);
-  assert.match($('inspector-jk').textContent, /标记/);
+  assert.match($('inspector-node-errors').textContent, /未定义字段 tag/);
   assert.ok($('inspector-node-errors').textContent.includes(model.nodes[0].errors[0]));
   assert.equal($('inspector-node-errors').hidden, false);
   assert.equal($('inspector-jk-state').hidden, true);
 });
 
 test('an invalid output reference displays its original mismatched tag', () => {
-  const model = compileModel({nodes: [{id: 'Q215', tag: 'L9B7', ex: 'J0K1'}], initial_q: {0: [], 1: []}, q_y: [{Y0: 'Q215L9B8'}]});
+  const model = compileModel({nodes: [{id: 'Q0', tag: 'L9B7', ex: 'J0K(X0)'}], initial_q: {0: [], 1: []}, q_y: [{Y0: 'Q0L9B8'}]});
   const engine = new JKEngine(model);
   const { $, render } = inspectorHarness(model, engine, 'Y0', displayNodeId);
   render();
   assert.equal($('inspector-output').hidden, false);
-  assert.equal($('inspector-output-source').textContent, '输出来源 Q215L9B8');
-  assert.notEqual($('inspector-output-source').textContent, '输出来源 Q215L9B7');
+  assert.equal($('inspector-output-source').textContent, '输出来源 Q0L9B8');
+  assert.notEqual($('inspector-output-source').textContent, '输出来源 Q0L9B7');
   assert.equal($('inspector-output-value').textContent, model.outputs[0].error);
 });

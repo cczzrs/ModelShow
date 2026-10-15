@@ -1,120 +1,57 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {defaultDisplay, exportDisplayModel, exportCurrentDisplayModel} from '../../src/output/output-display.js';
-
-const bits = ids => ({kind:'bits',bits:ids,order:'msb-first',mapping:'direct'});
-const liveDisplay = () => ({
-  ...defaultDisplay(1,2),enabled:true,scale:2.5,
-  pixels:[
-    {mode:'channels',channels:{r:bits(['Y0','Y1']),g:{kind:'fixed',value:128},b:{kind:'fixed',value:0}}},
-    {mode:'packed',bits:['Y1','Y0','Y2','Y3'],widths:{r:1,g:2,b:1},order:'lsb-first',mapping:'scale'},
-  ],
+import {exportCurrentModel,compileSnapshot} from '../../src/jk/model-schema.js';
+import {engineFor,drain} from '../helpers/v4-model.js';
+import {defaultDisplay} from '../../src/ui/output-display.js';
+test('live export retains pending task duplicates and current states, layout lives in display.show',()=>{
+ const e=engineFor(['J0K(X0)','K(Q0)'],{0:['Q0','Q1'],1:[]});e.send({X0:1});e.step();e.send({X0:0});
+ const board=defaultDisplay(1,2);board.enabled=true;board.scale=2.5;
+ const raw=e.model.raw,saved=exportCurrentModel(structuredClone(raw),raw,e,'3D',board);
+ assert.deepEqual(saved.initial_q,{0:['Q1'],1:['Q0']});assert.deepEqual(saved.FIFOS,{'Xi.FIFO':[{Q0:{}}],'Qi.FIFO':[{Q1:{}}]});
+ assert.equal(saved.display.show,'3D');assert.equal(Object.hasOwn(saved,'outputDisplay'),false);assert.doesNotThrow(()=>compileSnapshot(saved));
+ assert.deepEqual(saved.display.outputBoard,board);saved.display.outputBoard.pixels[0].channels.r.value=100;
+ assert.equal(board.pixels[0].channels.r.value,0);assert.equal(Object.hasOwn(raw.display,'outputBoard'),false);
+ assert.notEqual(saved.format_md5,raw.format_md5);assert.equal(e.length,2);
 });
-const original = () => ({
-  name:'same model',md5:'retain-this-original-hash',
-  nodes:[{id:'Q0Old',ex:' J0 K(X0) '},{id:'Q1',tag:'L2',ex:'J0K(X1)'}],
-  initial_q:{0:[],1:[]},q_y:[{Y0:'Q0Old'},{Y1:'Q1'}],
-  metadata:{version:1,notes:[null,'unchanged'],nested:{custom:true}},
-  outputDisplay:defaultDisplay(1,1),
+test('unimported draft retains its own states and queues; metadata tampering is rejected',()=>{
+ const e=engineFor();e.send({X0:1});drain(e);const raw=e.model.raw,draft=structuredClone(raw);draft.name='draft';
+ assert.deepEqual(exportCurrentModel(draft,raw,e).initial_q,raw.initial_q);
+ draft.md5='0'.repeat(32);assert.throws(()=>exportCurrentModel(draft,raw,e),/md5/);
+ const old=structuredClone(raw);old.format='jk-logic-structure-V3.1.0';old.nodes[0].ex='K(X0)';assert.throws(()=>exportCurrentModel(old,raw,e));
 });
-const freeze = value => {
-  if(value&&typeof value==='object'){Object.freeze(value);Object.values(value).forEach(freeze);}
-  return value;
-};
-const reverseKeys = value => Array.isArray(value)
-  ?value.map(reverseKeys)
-  :value&&typeof value==='object'
-    ?Object.fromEntries(Object.keys(value).reverse().map(key=>[key,reverseKeys(value[key])]))
-    :value;
-
-test('both export entry points capture the same current board and retain raw model fields',()=>{
-  const loaded=freeze(original()),raw=freeze(JSON.parse(JSON.stringify(loaded))),config=freeze(liveDisplay());
-  const exported=exportCurrentDisplayModel(raw,loaded,config);
-  assert.deepEqual(exported,exportDisplayModel(loaded,config));
-  assert.deepEqual(exported.outputDisplay,config);
-  assert.equal(exported.md5,loaded.md5);
-  assert.deepEqual(exported.nodes,loaded.nodes);
-  assert.deepEqual(exported.metadata,loaded.metadata);
-  assert.deepEqual(exported.initial_q,loaded.initial_q);
-  assert.deepEqual(exported.q_y,loaded.q_y);
-  assert.equal(raw.outputDisplay.scale,3,'the current scale is exported without changing the raw model new-board default');
-  assert.equal(loaded.outputDisplay.enabled,false);
+test('unimported name or display edits keep the draft board, state and queues instead of the live model',()=>{
+ const e=engineFor();e.model.raw.display.outputBoard=defaultDisplay(1,1);
+ e.send({X0:1});drain(e);e.send({X0:0});
+ const raw=e.model.raw,applied=defaultDisplay(2,2);applied.enabled=true;
+ for(const edit of [draft=>draft.name='renamed draft',draft=>draft.display.show='2D',draft=>draft.display.outputBoard.scale=2]){
+  const draft=structuredClone(raw);edit(draft);
+  const saved=exportCurrentModel(draft,raw,e,'1D',applied);
+  assert.deepEqual(saved.display,draft.display);assert.deepEqual(saved.initial_q,draft.initial_q);
+  assert.deepEqual(saved.FIFOS,draft.FIFOS);assert.equal(saved.md5,draft.md5);
+ }
+ const draft=structuredClone(raw);delete draft.display.outputBoard;
+ assert.equal(Object.hasOwn(exportCurrentModel(draft,raw,e,'1D',applied).display,'outputBoard'),false);
 });
-
-test('JSON formatting and nested object key order do not detach the loaded model from its board',()=>{
-  const loaded=freeze(original()),raw=reverseKeys(JSON.parse(JSON.stringify(loaded,null,4))),config=liveDisplay();
-  assert.notEqual(JSON.stringify(raw),JSON.stringify(loaded));
-  const exported=exportCurrentDisplayModel(raw,loaded,config);
-  assert.deepEqual(exported.outputDisplay,config);
-  assert.deepEqual(exported.metadata,loaded.metadata);
-  assert.deepEqual(exported.nodes,loaded.nodes);
+test('live export replaces stored board with the latest applied configuration',()=>{
+ const e=engineFor(),stored=defaultDisplay(1,1),applied=defaultDisplay(1,2);
+ e.model.raw.display.outputBoard=stored;applied.enabled=true;
+ const raw=e.model.raw,saved=exportCurrentModel(structuredClone(raw),raw,e,'4D',applied);
+ assert.deepEqual(saved.display,{show:'4D',outputBoard:applied});
+ assert.deepEqual(raw.display.outputBoard,stored);assert.equal(stored.cols,1);
+ assert.deepEqual(exportCurrentModel(structuredClone(raw),raw,e).display.outputBoard,stored);
 });
 
-test('a hidden current board still exports its dimensions, size and complete bindings',()=>{
-  const loaded=original(),config=freeze({...liveDisplay(),enabled:false});
-  const exported=exportCurrentDisplayModel(structuredClone(loaded),loaded,config);
-  assert.deepEqual(exported.outputDisplay,config);
-  assert.equal(exported.outputDisplay.enabled,false);
-  assert.equal(exported.outputDisplay.rows,1);
-  assert.equal(exported.outputDisplay.cols,2);
-  assert.equal(exported.outputDisplay.scale,2.5);
-  assert.deepEqual(exported.outputDisplay.pixels[1].bits,['Y1','Y0','Y2','Y3']);
-});
-
-test('a matching legacy model without outputDisplay gains the current configuration',()=>{
-  const loaded=original();delete loaded.outputDisplay;
-  const raw=freeze(structuredClone(loaded)),config=liveDisplay();
-  assert.deepEqual(exportCurrentDisplayModel(raw,loaded,config),exportDisplayModel(loaded,config));
-  assert.equal(Object.hasOwn(raw,'outputDisplay'),false);
-});
-
-test('drafts sharing a name and MD5 keep their own JSON instead of borrowing the loaded board',()=>{
-  const loaded=freeze(original()),config=freeze(liveDisplay());
-  const changes=[
-    ['node expression',draft=>{draft.nodes[0].ex='J0K(X7)';}],
-    ['output mapping',draft=>{draft.q_y[0].Y0='Q1';}],
-    ['node array order',draft=>{draft.nodes.reverse();}],
-    ['output array order',draft=>{draft.q_y.reverse();}],
-    ['explicit display edit',draft=>{draft.outputDisplay.scale=7.5;}],
-    ['removed display',draft=>{delete draft.outputDisplay;}],
-    ['metadata key changed',draft=>{draft.metadata.nested={different:true};}],
-    ['metadata primitive type',draft=>{draft.metadata.version='1';}],
-  ];
-  for(const [label,change] of changes){
-    const draft=structuredClone(loaded);change(draft);freeze(draft);
-    assert.equal(draft.name,loaded.name);
-    assert.equal(draft.md5,loaded.md5);
-    const exported=exportCurrentDisplayModel(draft,loaded,config);
-    assert.deepEqual(exported,draft,label);
-    assert.notEqual(exported,draft,`${label}: return an independent snapshot`);
-  }
-});
-
-test('without a loaded model, a draft keeps its own board or absence of one',()=>{
-  for(const loaded of [undefined,null]){
-    for(const hasDisplay of [true,false]){
-      const raw=original();if(!hasDisplay)delete raw.outputDisplay;freeze(raw);
-      const exported=exportCurrentDisplayModel(raw,loaded,liveDisplay());
-      assert.deepEqual(exported,raw);
-      assert.notEqual(exported,raw);
-      assert.equal(Object.hasOwn(exported,'outputDisplay'),hasDisplay);
-    }
-  }
-});
-
-test('export snapshots share no mutable model or board arrays with their inputs',()=>{
-  const loaded=freeze(original()),config=freeze(liveDisplay());
-  const exported=exportCurrentDisplayModel(structuredClone(loaded),loaded,config);
-  exported.nodes[0].ex='changed after export';
-  exported.metadata.notes.push('added after export');
-  exported.outputDisplay.pixels[0].channels.r.bits.reverse();
-  assert.equal(loaded.nodes[0].ex,' J0 K(X0) ');
-  assert.deepEqual(loaded.metadata.notes,[null,'unchanged']);
-  assert.deepEqual(config.pixels[0].channels.r.bits,['Y0','Y1']);
-  const draft=original();draft.name='not installed';draft.outputDisplay=liveDisplay();freeze(draft);
-  const draftExport=exportCurrentDisplayModel(draft,loaded,config);
-  draftExport.metadata.nested.custom=false;
-  draftExport.outputDisplay.pixels[1].bits.push('Y9');
-  assert.equal(draft.metadata.nested.custom,true);
-  assert.deepEqual(draft.outputDisplay.pixels[1].bits,['Y1','Y0','Y2','Y3']);
+test('the manager JSON with only a synced board still captures live state and tasks',()=>{
+ const e=engineFor(),raw=e.model.raw,board=defaultDisplay(1,1);
+ board.enabled=true;board.pixels[0].channels.r.value=173;
+ e.send({X0:1});drain(e);e.send({X0:0});
+ const displayed=structuredClone(raw);displayed.display.outputBoard=structuredClone(board);
+ const saved=exportCurrentModel(displayed,raw,e,'2D',board);
+ assert.deepEqual(saved.initial_q,{0:[],1:['Q0']});
+ assert.deepEqual(saved.FIFOS,{'Xi.FIFO':[{Q0:{}}],'Qi.FIFO':[]});
+ assert.deepEqual(saved.display,{show:'2D',outputBoard:board});
+ displayed.name='unimported edit';
+ const draft=exportCurrentModel(displayed,raw,e,'2D',board);
+ assert.deepEqual(draft.initial_q,raw.initial_q);assert.deepEqual(draft.FIFOS,raw.FIFOS);
+ assert.equal(draft.name,'unimported edit');
 });

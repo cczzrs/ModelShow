@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {inflateSync} from 'node:zlib';
-import {decodeInputImage} from '../../src/input/image-input-loader.js';
-import {IMAGE_INPUT_LIMITS} from '../../src/input/image-input.js';
+import {decodeInputImage} from '../../src/ui/image-input-loader.js';
+import {IMAGE_INPUT_LIMITS} from '../../src/ui/image-input.js';
 
 const fixture=async name=>readFile(new URL(`../fixtures/image-input-${name}`,import.meta.url));
 const file=(bytes,name='pixels.png',type='application/octet-stream')=>Object.assign(new Blob([bytes],{type}),{name});
