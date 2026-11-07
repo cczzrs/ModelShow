@@ -1,5 +1,5 @@
 /** Shared model-pool data rules. No storage, network, or browser dependencies. */
-import {compileSnapshot} from './model-schema.js';
+import {compileModel} from './model-schema.js';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
@@ -34,11 +34,11 @@ function timestamp(value, label) {
 }
 
 function validateModel(model) {
-  try { return compileSnapshot(model).raw; }
+  try { return compileModel(model).raw; }
   catch (error) { fail(`模型格式错误：${error.message}`); }
 }
 
-/** Validate and clone a pool containing current V4 snapshots only. */
+/** Validate and clone a pool containing JKRD7 definitions only. */
 export function parseModelPool(raw) {
   const pool = cloneJSON(raw);
   if (!object(pool)) fail('模型池必须是 JSON 对象');

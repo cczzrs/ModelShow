@@ -1,596 +1,513 @@
-import "./style.css";
-import { compileModel, JKEngine } from "../src/jk/engine.js";
-import { exportCurrentModel } from "../src/jk/model-schema.js";
-import { Playback } from "../src/ui/playback.js";
-import { FrameUpdates } from "../src/ui/frame-updates.js";
-import { loadDisplay } from "../src/ui/output-display.js";
-import { OutputDisplayUI, lampDetails } from "../src/ui/output-display-ui.js";
-import { NetworkView } from "../src/scene/view.js";
-import { ImageInputUI } from "../src/ui/image-input-ui.js";
-import { displayNodeId } from "../src/jk/node-id.js";
-import { setupSceneFullscreen } from "../src/scene/fullscreen.js";
-import { ModelManager } from "../src/ui/model-manager.js";
-import { APP_CONFIG } from "./config.js";
-const $ = (id) => document.getElementById(id);
-const cloneTemplate = (id) => $(id).content.firstElementChild.cloneNode(true);
-const speedConfig = APP_CONFIG.playback.speed;
-for (const key of ["min", "max", "step"]) $("speed")[key] = speedConfig[key];
-$("speed").value = speedConfig.value;
-$("skip").checked = APP_CONFIG.playback.skipAnimation;
-$("queue").style.setProperty(
-  "--queue-row-height",
-  `${APP_CONFIG.lists.queue.rowHeight}px`,
-);
-for (const button of $("layout-buttons").querySelectorAll("[data-layout]")) {
-  button.setAttribute(
-    "aria-pressed",
-    String(button.dataset.layout === APP_CONFIG.scene.layout),
-  );
+import './style.css';
+import './cosmic.css';
+import { APP_CONFIG } from './config.js';
+import seedPool from './example.json';
+import { compileModel, validateRunScript, validateSnapshot } from '../src/jk/model-schema.js';
+import { JKEngine } from '../src/jk/engine.js';
+import { GPUCompute } from '../src/jk/gpu-compute.js';
+import { parseModelPool } from '../src/jk/model-pool.js';
+import { pixelsToBatches } from '../src/ui/image-input.js';
+import { NetworkView } from '../src/scene/network-view.js';
+import { setupSceneFullscreen } from '../src/scene/fullscreen.js';
+import { NodeTree } from '../src/ui/node-tree.js';
+import { CosmicWorkspace } from '../src/ui/cosmic-workspace.js';
+import { NetworkStylePanel } from '../src/ui/network-style-panel.js';
+
+const $ = id => document.getElementById(id);
+const jkmPanel = $('jkm-panel');
+$('app').dataset.workspace = APP_CONFIG.workspace.active;
+for (const [name, value] of Object.entries({ 'rail-bg': APP_CONFIG.desktop.theme.rail, fg: APP_CONFIG.desktop.theme.foreground })) {
+  jkmPanel.style.setProperty(`--cosmic-${name}`, value);
 }
-$("layout-status").textContent = `${APP_CONFIG.scene.layout} 拓扑布局`;
-$("node-labels").setAttribute(
-  "aria-pressed",
-  String(APP_CONFIG.scene.nodeLabelsHidden),
-);
-$("node-labels").textContent = APP_CONFIG.scene.nodeLabelsHidden
-  ? "显示名称和次数"
-  : "隐藏名称和次数";
-$("black-background").setAttribute(
-  "aria-pressed",
-  String(APP_CONFIG.scene.blackBackground),
-);
-let model,
-  engine,
-  playback,
-  selected,
-  view,
-  modelVersion = 0;
-const frameUpdates = new FrameUpdates(update, (event) =>
-  view?.syncOutputs(engine, event),
-);
-const outputElements = new Map(),
-  outputPublicationElements = new Map(),
-  pickerElements = new Map();
-const displayUI = new OutputDisplayUI(
-  $("output-display-dialog"),
-  (config) => {
-    view?.setOutputDisplay(config);
-    modelManager.syncOutputBoard(config);
-    renderInspector();
-  },
-);
-const imageUI = new ImageInputUI(
-  $("image-input-dialog"),
-  (json, version) => {
-    if (version !== modelVersion)
-      throw new Error("模型已更换，请重新提取像素数据。");
-    $("input-json").value = json;
-    message("已填入图片像素数据，点击“发送信号”执行。");
-  },
-  () => $("input-json").focus(),
-);
-function message(text, error = false) {
-  $("message").textContent = text;
-  $("message").classList.toggle("error", error);
+jkmPanel.style.setProperty('--cosmic-scene-background-edge', APP_CONFIG.scene.appearance.backgroundEdge);
+const nodeInspector = $('node-inspector');
+for (const section of nodeInspector.querySelectorAll('[data-inspector-section]')) {
+  section.open = APP_CONFIG.view.inspector.sections[section.dataset.inspectorSection];
 }
-function select(key, toggle = true) {
-  selected = toggle && selected === key ? null : key;
-  view?.select(selected);
-  for (const [k, b] of pickerElements)
-    b.classList.toggle("active", k === selected);
-  $("inspector")
-    .closest(".inspector")
-    .classList.toggle("has-selection", selected != null);
-  renderInspector();
+$('events-records').open = APP_CONFIG.view.queues.events.records.expanded;
+const clone = id => $(id).content.firstElementChild.cloneNode(true);
+const pretty = value => JSON.stringify(value, null, 2);
+const builtins = seedPool.permanent.map(entry => entry.model);
+let model, engine, selected, modelPath, running = false, inFlight = null, timer = null;
+let schedulerVersion = 0, imageLoadVersion = 0, poolPending = false;
+const fileVersions = new Map();
+let runStart = 0, scriptBatches = null, nextBatch = 0, pool = null, authCommand = null, imageBitmap = null;
+let observation = structuredClone(APP_CONFIG.observe);
+const nodeTree = new NodeTree({
+  element: $('node-tree'),
+  groupTemplate: $('node-tree-group-template'),
+  nodeTemplate: $('node-tree-node-template'),
+  tagTemplate: $('node-purpose-tag-template'),
+  onSelect: selectNode,
+  expandedDepth: APP_CONFIG.view.inspector.tree.expandedDepth,
+});
+const gpu = new GPUCompute((text, ready) => {
+  $('compute-message').textContent = text;
+  $('compute-status').textContent = ready && $('backend').value === 'webgpu' ? 'WebGPU EX' : 'JavaScript';
+});
+const view = new NetworkView({
+  container: $('viewport'), onSelect: selectNode,
+  onStatus: status => { $('render-status').textContent = status.label; $('render-status').title = status.reason || status.label; $('gpu-message').hidden = status.backend !== 'error'; $('gpu-detail').textContent = status.reason || ''; },
+  onLayout: layout => {
+    if (layout.pending) { $('layout-status').textContent = '正在排列…'; return; }
+    if (layout.error) { $('layout-status').textContent = `布局失败：${layout.error}`; return; }
+    const mode = typeof layout === 'string' ? layout : layout.mode;
+    $('layout-status').textContent = typeof layout === 'string' ? `${layout} 布局` : (layout.label || `${mode} 布局`);
+  },
+});
+const desktop = new CosmicWorkspace({
+  root: jkmPanel, config: APP_CONFIG.desktop,
+  onAppearanceChange: (key, appearance) => {
+    if (key !== 'scene') return;
+    const result = view.applyAppearance(appearance);
+    if (result?.blackBackgroundChanged) $('black-background').setAttribute('aria-pressed', 'false');
+  },
+  onCommand: command => {
+    if (command === 'rgb') switchWorkspace('rgb').catch(error => message(error.message, true));
+  },
+});
+jkmPanel.addEventListener('network-style-error', event => message(event.detail.message, true));
+const networkStylePanel = new NetworkStylePanel({
+  root: jkmPanel, config: APP_CONFIG.scene.styles,
+  onChange: styles => view.setNetworkStyles(styles),
+  getMarkerColor: () => view.appearance?.foreground ?? APP_CONFIG.scene.styles.nodes.computationTypes.ex.marker.color,
+});
+jkmPanel.addEventListener('cosmic-workspace-error', event => message(event.detail.message, true));
+jkmPanel.addEventListener('cosmic-window-show', event => {
+  if (!model) return;
+  const key = event.detail.key;
+  if (key === 'snapshot' && !$('snapshot-json').value.trim()) boundary(() => { $('snapshot-json').value = pretty(engine.snapshot(APP_CONFIG.model.snapshotName)); $('snapshot-error').textContent = ''; }).catch(error => message(error.message, true));
+});
+function updatePlayback() {
+  const speed = Number($('speed').value), skip = $('skip').checked;
+  view.setPlayback({ running, speed, skip });
+  $('speed-label').textContent = skip ? '计算速度' : '动画速度';
+  $('speed-budget').textContent = skip ? `每帧预算 ${APP_CONFIG.engine.frameBudgetMs * speed} ms` : `每单元 ${(APP_CONFIG.playback.duration / speed).toFixed(2)} 秒`;
+}
+function interval() { return $('skip').checked ? 0 : APP_CONFIG.playback.duration * 1000 / Number($('speed').value); }
+
+
+function message(text, error = false) { $('message').textContent = text; $('message').classList.toggle('error', error); }
+function options(element, items, selectedValue) {
+  element.replaceChildren();
+  items.forEach(([value, label]) => { const option = clone('option-template'); option.value = value; option.textContent = label; element.append(option); });
+  if (selectedValue !== undefined) element.value = selectedValue;
+}
+function show(id) { if ($(id).matches('[data-cosmic-window]')) desktop.show(id); else $(id).showModal(); }
+function close(id) { if ($(id).matches('[data-cosmic-window]')) desktop.hide(id); else $(id).close(); }
+function download(name, value, type = 'application/json') {
+  const url = URL.createObjectURL(new Blob([typeof value === 'string' ? value : pretty(value)], { type }));
+  const link = clone('download-template'); link.href = url; link.download = name.replace(/[\\/:*?"<>|]/g, '_');
+  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function readFile(file) {
+  if (!file) return null;
+  if (file.size > APP_CONFIG.view.fileBytes) throw new Error('文件超过 32 MiB 限制');
+  return JSON.parse(await file.text());
+}
+function pause() { running = false; schedulerVersion++; clearTimeout(timer); timer = null; $('play').textContent = '▶ 播放'; updatePlayback(); }
+async function boundary(action) { pause(); if (inFlight) await inFlight; return action(); }
+function action(id, fn, errorId) {
+  $(id).addEventListener('click', async () => {
+    if (errorId) $(errorId).textContent = '';
+    try { await fn(); } catch (error) { if (errorId) $(errorId).textContent = error.message; message(error.message, true); }
+  });
+}
+function selectNode(path) {
+  if (path !== null && !model?.jki.has(path)) return;
+  selected = path; nodeTree.select(path); renderInspector(); view.update(engine, selected);
+}
+function setText(id, text) { const element = $(id); if (element) element.textContent = text; }
+function currentScript(batches = [JSON.parse($('input-json').value)]) {
+  return { run: APP_CONFIG.model.runName, model: modelPath, observe: structuredClone(observation), batches };
+}
+function loadModel(raw, path, builtin = false) {
+  const compiled = compileModel(raw);
+  const observe = builtin && raw.jkm === APP_CONFIG.model.example ? structuredClone(APP_CONFIG.observe) : { watch: [], read: [] };
+  const next = new JKEngine(compiled, { observe, historyLimit: APP_CONFIG.view.traceRows });
+  // Replace only after the model and execution capability have both been checked.
+  model = compiled; engine = next; observation = observe; modelPath = path || `${raw.jkm}.jkm.json`;
+  scriptBatches = null; nextBatch = 0; selected = null;
+  $('model-name').textContent = raw.jkm;
+  $('model-md5').textContent = `JKRD ${raw.version}`;
+  $('cosmic-model-name').textContent = raw.jkm;
+  $('cosmic-model-name').title = raw.jkm;
+  $('cosmic-model-md5').textContent = raw.version;
+  $('model-summary').textContent = `${raw.version} · ${model.jki.size} JKI / ${model.jks.size} JKS`;
+  $('metadata').textContent = pretty(raw.pro || {});
+  $('events-queue-name').textContent = engine.queue;
+  $('tasks-queue-name').textContent = engine.queue;
+  $('model-json').value = pretty(model.raw); $('model-path').value = modelPath;
+  $('input-json').value = pretty(builtin && raw.jkm === APP_CONFIG.model.example ? APP_CONFIG.input.batch : model.inputs.slice(0, 1));
+  $('script-json').value = pretty(currentScript());
+  $('watch-json').value = pretty(observation.watch); $('read-json').value = pretty(observation.read);
+  $('snapshot-json').value = '';
+  $('input-buttons').replaceChildren();
+  for (const path of model.inputs) {
+    const button = clone('input-template');
+    const node = model.jki.get(path); const tag = node.pro?.tag?.filter(value => value !== 'pre').join(' ');
+    button.querySelector('strong').textContent = tag || node.id;
+    button.querySelector('span').textContent = path;
+    button.title = `注入 ${path}`;
+    button.addEventListener('click', () => boundary(() => { engine.inject(path); scriptBatches = null; render(); message(`已注入 ${path}；点击运行或单步处理。`); }).catch(error => message(error.message, true)));
+    $('input-buttons').append(button);
+  }
+  nodeTree.setModel(model, selected);
+  for (const id of ['image-zero', 'image-one']) options($(id), model.inputs.map(path => [path, path]));
+  if (model.inputs.length > 1) $('image-one').value = model.inputs[1];
+  networkStylePanel.setModel(model);
+  view.setModel(model); render();
+  message(`已加载 ${raw.jkm} · JKRD7 定义校验通过。`);
 }
 function renderInspector() {
-  if (!model) return;
-  const panels = $("inspector").querySelectorAll("[data-inspector-panel]");
-  for (const panel of panels) panel.hidden = true;
-  if (selected?.startsWith("lamp:")) {
-    const index = Number(selected.slice(5));
-    const pixel = view?.outputState.config.pixels[index];
-    $("selected-id").textContent = `灯 ${index + 1}`;
-    $("inspector-lamp").hidden = false;
-    $("inspector-lamp-readout").hidden = !pixel;
-    $("inspector-lamp-edit").hidden = !pixel;
-    $("inspector-lamp-missing").hidden = !!pixel;
-    if (pixel)
-      $("inspector-lamp-readout").textContent = lampDetails(
-        pixel,
-        view.outputState.results[index],
-      );
-    return;
-  }
-  const node = model.nodes.find((node) => node.key === selected);
-  $("selected-id").textContent =
-    node?.displayName ?? node?.id ?? selected ?? "—";
-  if (!node) {
-    if (selected == null) {
-      $("inspector-empty").hidden = false;
-    } else if (model.inputs.includes(selected)) {
-      $("inspector-input").hidden = false;
-      $("inspector-input-value").textContent =
-        `当前可读值：${engine.latest.get(selected) ?? "尚未输入"}`;
-    } else {
-      const output = model.outputs.find((output) => output.id === selected);
-      if (output) {
-        $("inspector-output").hidden = false;
-        $("inspector-output-source").textContent =
-          `输出来源 ${output.error ? (output.originalSource ?? output.source) : displayNodeId(model, output.source)}`;
-        $("inspector-output-value").textContent =
-          output.error ??
-          `最近输出事件数据：${engine.outputs.get(output.id) ?? "尚未输出"}`;
-        $("inspector-output-publication").textContent =
-          `最近发布：${engine.outputPublications.get(output.id) ?? "尚未发布"} · 收到事件时立即输出`;
-      }
+  const node = model?.jki.get(selected);
+  nodeTree.select(selected);
+  $('selected-id').textContent = selected || '—';
+  nodeInspector.classList.toggle('has-selection', Boolean(node));
+  jkmPanel.querySelector('[data-cosmic-window="inspector"]').classList.toggle('has-selection', Boolean(node));
+  $('node-q').textContent = node ? engine.q[selected] : '—';
+  $('node-q').dataset.value = node ? engine.q[selected] : '';
+  $('node-empty').hidden = Boolean(node); $('node-sections').hidden = !node;
+  if (!node) return;
+  $('node-initial').textContent = node.q;
+  const tags = node.pro?.tag ?? [], tagKey = JSON.stringify(tags), tagContainer = $('node-tags');
+  if (tagContainer.dataset.tags !== tagKey) {
+    tagContainer.replaceChildren();
+    for (const text of tags) {
+      const tag = clone('node-purpose-tag-template'); tag.textContent = text; tagContainer.append(tag);
     }
-    return;
+    if (!tags.length) tagContainer.textContent = '未设置';
+    tagContainer.dataset.tags = tagKey;
   }
-  $("inspector-jk").hidden = false;
-  $("inspector-fixed-id").textContent = node.id;
-  $("inspector-expression").textContent = String(node.ex ?? "缺失 ex");
-  $("inspector-node-errors").hidden = !node.errors.length;
-  $("inspector-node-errors").textContent = node.errors.join("；");
-  $("inspector-jk-state").hidden = !!node.errors.length;
-  $("inspector-jk-events").hidden = !!node.errors.length;
-  $("inspector-count").textContent = engine.counts.get(node.key);
-  if (node.errors.length) {
-    $("inspector-evaluation").hidden = true;
-    return;
-  }
-  const stateful = node.initial !== null;
-  $("inspector-q").textContent = engine.q.get(node.id) ?? "尚未计算";
-  $("inspector-initial").textContent = stateful ? node.initial : "0";
-  $("inspector-type").textContent = stateful ? "有状态 Qi_q" : "无状态 Qi_J0";
-  $("inspector-state-rule").textContent = stateful
-    ? "initial_q 声明保存状态；每次从当前 q 开始，首项 J0 仍会清零。"
-    : "未列入 initial_q；每次完整 EX 从 J0 清零，结果只用于传播与观察，不作为下次起点。";
-  $("inspector-latest").textContent = engine.latest.get(node.id) ?? "尚未发布";
-  $("inspector-propagation").textContent = node.pro;
-  const waiting = engine.waiting(node).map((id) => displayNodeId(model, id));
-  const cached = [...engine.cache.get(node.key)]
-    .map(([id, value]) => `${displayNodeId(model, id)}=${value}`)
-    .join(", ");
-  $("inspector-waiting").textContent = node.required.length
-    ? `Qi_J0 到达屏障 · 等待 ${waiting.join("、") || "已齐"}${cached ? " · 已保存 " + cached : ""}；Xi 与 Qi_q 仅在执行时读取当前值。`
-    : "无 Qi_J0 屏障 · 每次非自身来源事件生成独立任务，出队时固定参数后完整执行 EX。";
-  const last = engine.last.get(node.key);
-  $("inspector-publication").textContent = last
-    ? `最近求值 q=${last.value} · ${last.published ? "已发布一次来源事件" : node.pro === "q=" ? "不传播（q=）" : "未满足传播条件，已过滤事件"}；当前 q 已提交。`
-    : "尚未求值；初始化只设置 q，不发布事件。";
-  const evaluation = $("inspector-evaluation");
-  evaluation.hidden = !last;
-  if (last) {
-    // Preserve an explicitly collapsed details element through live updates.
-    if (evaluation.dataset.node !== node.key) evaluation.open = true;
-    evaluation.dataset.node = node.key;
-    $("inspector-evaluation-title").textContent =
-      `最近求值 #${last.total} · 实际读取参数`;
-    $("inspector-reads").textContent = JSON.stringify(last.reads);
-    const steps = document.createDocumentFragment();
-    for (const operation of last.operations) {
-      const row = cloneTemplate("evaluation-step-template");
-      row.textContent = `${operation.token} : ${operation.before} ${operation.token[0] === "J" ? "AND" : "XOR"} ${operation.input} → ${operation.after}`;
-      steps.append(row);
-    }
-    $("inspector-operations").replaceChildren(steps);
+  $('node-trigger-mode').textContent = node.trigger.all ? 'all · 全部来源到达' : 'any · 任一来源到达';
+  $('node-trigger').textContent = model.triggerRefs.get(selected).join('\n') || '外部输入入口';
+  const registration = model.regOf.get(selected);
+  $('node-registration').textContent = registration ? `${registration.group} / ${registration.type}` : '未登记';
+  const operations = node.sources?.ex ?? [], hasEX = operations.length > 0;
+  $('node-ex-count').textContent = hasEX ? `${operations.length} 步` : '空 EX';
+  $('node-ex-empty').hidden = hasEX; $('node-ex-fields').hidden = !hasEX;
+  $('node-seed').textContent = hasEX ? node.sources.seed === undefined ? 'q_before · 执行入口的当前 q' : `固定 seed = ${node.sources.seed}` : '—';
+  $('node-ex').textContent = hasEX ? operations.join(' → ') : '—';
+  $('node-sources').textContent = hasEX ? model.sourceRefs.get(selected).map((path, index) => `${index + 1}. ${operations[index]} ← ${path}`).join('\n') : '—';
+  $('node-publish').textContent = Object.keys(node.publish || {})[0] || 'always';
+  $('node-arrivals').hidden = !node.trigger.all;
+  $('node-all').textContent = node.trigger.all ? JSON.stringify(engine.triggerAll[selected]) : '—';
+  $('node-json').textContent = pretty(node);
+}
+function queueRows(id, items) {
+  $(id).replaceChildren();
+  for (const item of items) {
+    const row = clone('queue-row-template');
+    const target = item.source || item.node || item.tx;
+    row.querySelector('[data-kind]').textContent = item.source ? 'EV' : item.tx ? 'TX' : 'EX';
+    row.querySelector('[data-target]').textContent = target;
+    row.querySelector('[data-detail]').textContent = item.to ? `→ ${item.to.length}` : item.prereqs ? `${item.prereqs.length} 前置` : '待处理';
+    row.title = JSON.stringify(item);
+    row.querySelector('button').addEventListener('click', () => selectNode(target));
+    $(id).append(row);
   }
 }
-function renderQueue() {
+function renderQueue(kind, items) {
+  const limit = APP_CONFIG.view.queues.rows;
+  $(`${kind}-count`).textContent = items.length;
+  $(`${kind}-empty`).hidden = items.length > 0;
+  queueRows(`${kind}-list`, items.slice(0, limit));
+  const notice = $(`${kind}-limit`);
+  notice.hidden = items.length <= limit;
+  notice.textContent = notice.hidden ? '' : `显示前 ${limit} 项，全部 ${items.length} 项仍保留在队列中。`;
+}
+function historyRows(records) {
+  $('trace-list').replaceChildren();
+  for (const record of records) {
+    const row = clone('history-row-template'), kind = Object.keys(record)[0];
+    row.querySelector('[data-kind]').textContent = kind.toUpperCase();
+    row.querySelector('[data-detail]').textContent = kind === 'q' ? `${record.q} · ${record.from ?? '∅'} → ${record.to}`
+      : kind === 'output' ? `${record.output} · ${record.values.join('')}` : record[kind];
+    row.title = JSON.stringify(record); $('trace-list').append(row);
+  }
+}
+function renderOutput() {
+  const latest = engine.outputs.at(-1);
+  $('output-rows').replaceChildren();
+  for (const [index, path] of observation.read.entries()) {
+    const row = clone('output-row-template'); row.querySelector('[data-output-id]').textContent = `b${index}`;
+    row.querySelector('.source').textContent = path;
+    row.querySelector('.output-value').textContent = latest?.values[index] ?? '—';
+    row.querySelector('.output-value').classList.toggle('on', latest?.values[index] === 1);
+    row.querySelector('.output-publication').textContent = latest ? '已输出' : '待通知';
+    $('output-rows').append(row);
+  }
+  $('outputs-empty').hidden = observation.read.length > 0;
+  setText('output-status', latest ? `${engine.outputs.length} 次输出 · ${latest.source}` : 'watch 通知触发读取 · 尚未输出');
+  $('output-bits').replaceChildren();
+  for (const bit of latest?.values || []) { const item = clone('bit-template'); item.textContent = bit; item.classList.toggle('one', bit === 1); $('output-bits').append(item); }
+  if (latest?.values.length) {
+    const number = BigInt(`0b${latest.values.join('')}`);
+    $('output-character').textContent = latest.values.length === 8 && number >= 32n && number <= 126n ? String.fromCharCode(Number(number)) : '·';
+    $('output-number').textContent = `0x${number.toString(16).toUpperCase()} / ${number.toString()}`;
+  } else { $('output-character').textContent = '—'; $('output-number').textContent = '等待通知'; }
+  $('observe-summary').textContent = observation.watch.length ? `watch: ${observation.watch.join(', ')} · ${engine.outputs.length} 条输出` : '未配置输出订阅';
+  const canvas = $('output-board'), ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const outputs = engine.outputs.slice(-APP_CONFIG.view.outputRows);
+  const cols = Math.max(1, observation.read.length), cell = Math.min(APP_CONFIG.view.board.cellSize, canvas.width / cols), visible = Math.floor(canvas.height / cell);
+  outputs.slice(-visible).forEach((output, y) => output.values.forEach((bit, x) => { ctx.fillStyle = bit ? APP_CONFIG.view.board.one : APP_CONFIG.view.board.zero; ctx.fillRect(x * cell + 1, y * cell + 1, Math.max(1, cell - 2), Math.max(1, cell - 2)); }));
+}
+function render() {
   if (!engine) return;
-  const host = $("queue");
-  const { rowHeight, overscanBefore, overscanCount } = APP_CONFIG.lists.queue;
-  $("queue-count").textContent = engine.length.toLocaleString();
-  host.style.setProperty(
-    "--queue-total-height",
-    `${engine.length * rowHeight}px`,
-  );
-  const maxScroll = Math.max(0, engine.length * rowHeight - host.clientHeight);
-  if (host.scrollTop > maxScroll) host.scrollTop = maxScroll;
-  const start = Math.max(
-    0,
-    Math.floor(host.scrollTop / rowHeight) - overscanBefore,
-  );
-  const end = Math.min(
-    engine.length,
-    start + Math.ceil(host.clientHeight / rowHeight) + overscanCount,
-  );
-  host.style.setProperty("--queue-scroll-offset", `${start * rowHeight}px`);
-  const fragment = document.createDocumentFragment();
-  for (let index = start; index < end; index++) {
-    const item = engine.itemAt(index);
-    const row = cloneTemplate("queue-row-template");
-    row.querySelector("button").dataset.nodeKey =
-      model.byId.get(item.node)?.[0]?.key ?? item.node;
-    row.querySelector("em").textContent = `${item.queue} #${item.ticket}`;
-    row.querySelector("[data-node-name]").textContent =
-      displayNodeId(model, item.node);
-    const values = row.querySelector(".values");
-    values.textContent = JSON.stringify(item.arrivals);
-    values.title = "任务锁存的 Qi_J0 数据；Xi 与有状态 q 在任务执行时读取最新值";
-    fragment.append(row);
-  }
-  $("queue-rows").replaceChildren(fragment);
-  $("queue-empty").hidden = engine.length > 0;
+  $('play').textContent = running ? 'Ⅱ 暂停' : '▶ 播放';
+  updatePlayback();
+  $('run-state').textContent = engine.busy ? '处理中' : running ? '运行中' : engine.idle ? '静止' : '已暂停';
+  $('run-status').classList.toggle('running', running);
+  $('compute-status').textContent = $('backend').value === 'webgpu' && gpu.device ? 'WebGPU EX' : 'JavaScript';
+  const edgeCount = [...model.triggerRefs.values()].reduce((sum, list) => sum + list.length, 0) + [...model.sourceRefs.values()].reduce((sum, list) => sum + list.length, 0);
+  const operationCount = [...model.jki.values()].reduce((sum, node) => sum + (node.sources?.ex?.length || 0), 0);
+  const stateCount = Object.values(engine.q).filter(value => value !== null).length;
+  for (const [id, value] of Object.entries({ 'stat-nodes': model.jki.size, 'stat-edges': edgeCount, 'stat-state': stateCount, 'stat-ex': operationCount, 'stat-groups': model.jks.size, 'stat-units': engine.units, 'stat-events': engine.events.length, 'stat-tasks': engine.tasks.length, 'stat-gpu': gpu.stats.dispatches })) setText(id, value);
+  for (const id of ['total', 'total2']) $(id).textContent = engine.stats.nodeTasks;
+  $('event-total').textContent = engine.stats.nodeTasks + engine.stats.transactions;
+  $('EXtotal').textContent = engine.stats.operations;
+  renderQueue('events', engine.events);
+  renderQueue('tasks', engine.tasks);
+  const trace = engine.trace.slice(-APP_CONFIG.view.traceRows);
+  historyRows(trace);
+  $('trace-limit').textContent = `显示最近 ${trace.length} / ${engine.trace.length} 条；下载保留完整记录。`;
+  $('rounds-json').textContent = pretty({ trigger_all: engine.triggerAll, rounds: engine.rounds });
+  renderInspector(); renderOutput(); view.update(engine, selected);
 }
-function update() {
-  if (!engine) return;
-  for (const o of model.outputs) {
-    const cell = outputElements.get(o.id),
-      v = engine.outputs.get(o.id);
-    cell.textContent = o.error ? "异常" : v === null ? "未输出" : String(v);
-    cell.classList.toggle("empty", v === null);
-    const published = engine.outputPublications.get(o.id);
-    outputPublicationElements.get(o.id).textContent = o.error
-      ? "绑定异常"
-      : published == null ? "尚未发布" : `最近发布 ${published}`;
-  }
-  $("output-status").textContent = model.canExecute === false
-    ? "模型校验未通过 · 正式输出不可用"
-    : "Yi 按事件即时输出 · 队列排空不生成新输出";
-  $("output-status").classList.toggle("pending", engine.length > 0);
-  $("total").textContent = engine.total.toLocaleString();
-  $("event-total").textContent = engine.eventTotal.toLocaleString();
-  $("play").textContent = playback.running ? "Ⅱ 暂停" : "▶ 继续";
-  $("total2").textContent = engine.total.toLocaleString();
-  $("EXtotal").textContent = engine.exTotal.toLocaleString();
-  $("send").disabled = $("step").disabled = $("play").disabled = model.canExecute === false;
-  const status = model.canExecute === false
-    ? "校验未通过"
-    : !playback.running
-      ? "已暂停"
-      : engine.length || playback.active || playback.visuals.length
-        ? "运行中"
-        : model.valid.some((n) => engine.waiting(n).length)
-          ? "等待输入"
-          : "就绪";
-  $("run-status").textContent = status;
-  $("footer-state").textContent =
-    `${model.inputs.length} 输入 / ${model.nodes.length} JK / ${model.outputs.length} 输出 · ${engine.length} EX 任务待执行`;
-  const fragment = document.createDocumentFragment();
-  for (const event of engine.history
-    .slice(-APP_CONFIG.lists.history.visibleEntries)
-    .reverse()) {
-    const row = cloneTemplate("history-row-template");
-    row.querySelector("span").textContent =
-      event.type === "input"
-        ? "↗ " + (event.accepted.join(" · ") || "无匹配输入")
-        : event.type === "task"
-          ? `${event.queue} #${event.ticket} ${displayNodeId(model, event.node)}`
-          : `求值 #${event.total} ${displayNodeId(model, event.node)}`;
-    row.querySelector("b").textContent =
-      event.type === "input"
-        ? "已入队"
-        : event.type === "task"
-          ? event.skipped ? "参数不可读 · 已结束" : `${event.executions.length} 次求值`
-          : `${event.before === null ? "·" : event.before} → ${event.value} · ${event.published ? "发布" : event.pro === "q=" ? "不传播" : "已过滤"}`;
-    row.classList.toggle("filtered", event.type === "execution" && !event.published);
-    fragment.append(row);
-  }
-  $("history").replaceChildren(fragment);
-  renderQueue();
-  view?.refresh(engine);
-  displayUI.update(engine.outputs);
-  renderInspector();
+async function processUnit(single = false) {
+  let result;
+  if ($('backend').value !== 'webgpu') result = engine.step();
+  else result = single || !$('skip').checked ? await engine.stepAsync(input => gpu.compute(input)) : await engine.runBatchAsync(inputs => gpu.computeBatch(inputs), { maxTasks: APP_CONFIG.engine.gpuBatch, maxEventUnits: APP_CONFIG.engine.frameUnits });
+  if (result && (single || !$('skip').checked)) { view.update(engine, selected); view.onUnit(result, { force: single }); }
+  return result;
 }
-function install(raw) {
-  const next = compileModel(raw); // Validate before replacing the current model.
-  model = next;
-  engine = new JKEngine(model);
-  selected = model.valid[0]?.key ?? model.nodes[0]?.key ?? model.inputs[0];
-  imageUI.setModel(model.inputs, ++modelVersion);
-  playback = new Playback(engine, {
-    onChange: (event) => frameUpdates.request(event),
-    onVisual: (event) =>
-      event ? view?.showTransfers(event.transfers) : view?.clearSignals(),
-    onProgress: (t) => view?.progress(t),
+function advanceScript() {
+  if (engine.idle && scriptBatches && nextBatch < scriptBatches.length) { engine.injectBatch(scriptBatches[nextBatch++]); return true; }
+  return false;
+}
+async function tick(generation) {
+  if (!running || generation !== schedulerVersion) return;
+  try {
+    const started = performance.now(); let count = 0;
+    do {
+      while (engine.idle && advanceScript()) { if (!engine.idle) break; }
+      if (engine.idle) { pause(); message(scriptBatches ? `运行脚本完成 · ${nextBatch} 批 · ${engine.outputs.length} 条输出。` : '队列已静止。'); break; }
+      await processUnit(); count++;
+      if (engine.units - runStart >= APP_CONFIG.engine.maxUnits) { pause(); message('已达到本次处理预算，队列完整保留；可继续运行或保存现场。'); break; }
+    } while (running && generation === schedulerVersion && $('skip').checked && count < APP_CONFIG.engine.frameUnits && performance.now() - started < APP_CONFIG.engine.frameBudgetMs * Number($('speed').value));
+    render();
+  } catch (error) { pause(); message(error.message, true); render(); }
+}
+function schedule() {
+  if (!running || timer !== null || inFlight) return;
+  const generation = schedulerVersion;
+  timer = setTimeout(() => {
+    timer = null;
+    if (!running || generation !== schedulerVersion || inFlight) return;
+    const work = tick(generation);
+    inFlight = work;
+    work.finally(() => {
+      if (inFlight === work) inFlight = null;
+      if (running) schedule();
+    });
+  }, interval());
+}
+function play() {
+  if (running) { pause(); render(); return; }
+  running = true; schedulerVersion++; runStart = engine.units; render(); schedule();
+}
+
+for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', () => close(button.dataset.close));
+options($('example-select'), builtins.map(item => [item.jkm, item.jkm]), APP_CONFIG.model.example);
+for (const [id, limits] of [['speed', APP_CONFIG.playback.speed], ['image-pixels', APP_CONFIG.image.limits.pixels], ['image-threshold', APP_CONFIG.image.limits.threshold]]) {
+  for (const key of ['min', 'max', 'step']) $(id)[key] = limits[key];
+}
+for (const [id, size] of [['output-board', APP_CONFIG.view.board], ['image-preview', APP_CONFIG.image.preview]]) { $(id).width = size.width; $(id).height = size.height; }
+$('backend').value = APP_CONFIG.engine.backend;
+$('speed').value = APP_CONFIG.playback.speed.value; $('speed-value').textContent = `${$('speed').value}×`;
+$('skip').checked = APP_CONFIG.playback.skip;
+updatePlayback();
+for (const button of jkmPanel.querySelectorAll('[data-layout]')) {
+  button.classList.toggle('active', button.dataset.layout === APP_CONFIG.scene.layout);
+  button.setAttribute('aria-pressed', String(button.dataset.layout === APP_CONFIG.scene.layout));
+  button.addEventListener('click', () => {
+    view.setLayout(button.dataset.layout);
+    for (const item of jkmPanel.querySelectorAll('[data-layout]')) { item.classList.toggle('active', item === button); item.setAttribute('aria-pressed', String(item === button)); }
   });
-  playback.running = APP_CONFIG.playback.running && engine.length === 0;
-  playback.speed = Number($("speed").value);
-  playback.skip = $("skip").checked;
-  updateSpeedControl();
-  $("model-name").textContent = String(raw.name ?? "未命名模型");
-  const verifiedMD5 = typeof raw.md5 === "string"
-    && raw.md5 === model.integrity.fingerprints?.md5;
-  $("model-md5").textContent = raw.md5 == null
-    ? "MD5: 未提供"
-    : `MD5${verifiedMD5 ? " 已核验" : " 未通过核验"}: ${raw.md5}`;
-  $("model-md5").title = model.integrity.fingerprints
-    ? `计算结构指纹 format_md5: ${model.integrity.fingerprints.format_md5}`
-    : "模型结构存在异常，无法生成规范结构指纹。";
-  $("stat-nodes").textContent = model.nodes.length;
-  $("stat-state").textContent = model.nodes.filter(
-    (n) => n.initial !== null,
-  ).length;
-  $("stat-edges").textContent =
-    model.nodes.reduce(
-      (sum, n) => sum + n.tokens.filter((t) => t.source).length,
-      0,
-    ) + model.outputs.length;
-  $("stat-ex").textContent = model.nodes.reduce(
-    (sum, n) => sum + n.tokens.length,
-    0,
-  );
-  const issues = [
-    ...model.issues,
-    ...model.nodes.flatMap((n) =>
-      n.errors.map((e) => `${n.displayName ?? n.id}：${e}`),
-    ),
-    ...model.outputs.filter((o) => o.error).map((o) => `${o.id}：${o.error}`),
-  ];
-  $("model-errors").hidden = !issues.length;
-  $("model-errors").textContent = issues.join("\n");
-  $("model-validation").textContent = model.canExecute === false
-    ? "模型校验未通过，已阻止运行；请修正下列问题。"
-    : model.integrity.status === "verified"
-      ? "完整快照校验通过。"
-      : "简式模型结构合法；未提供完整快照字段。";
-  $("model-validation").title = model.integrity.missing.length
-    ? `缺少字段：${model.integrity.missing.join("、")}`
-    : "校验覆盖结构、统计、端口、容量与规范指纹；功能结果需按输入序列验证。";
-  $("metadata").textContent = JSON.stringify(
-    Object.fromEntries(
-      Object.entries(raw).filter(
-        ([k]) => !["nodes", "initial_q", "q_y"].includes(k),
-      ),
-    ),
-    null,
-    2,
-  );
-  $("output-rows").replaceChildren();
-  $("outputs-empty").hidden = model.outputs.length > 0;
-  outputElements.clear();
-  outputPublicationElements.clear();
-  for (const output of model.outputs) {
-    const row = cloneTemplate("output-row-template");
-    row.querySelector("[data-output-id]").textContent = output.id;
-    row.querySelector(".source").textContent = output.error
-      ? (output.originalSource ?? output.source)
-      : displayNodeId(model, output.source);
-    const value = row.querySelector(".output-value");
-    $("output-rows").append(row);
-    outputElements.set(output.id, value);
-    outputPublicationElements.set(output.id, row.querySelector(".output-publication"));
-  }
-  $("node-picker").replaceChildren();
-  pickerElements.clear();
-  const pickerItems = [
-    ...model.inputs.map((id) => ({ id, key: id })),
-    ...model.nodes,
-    ...model.outputs.map((output) => ({
-      id: output.id,
-      key: output.id,
-      errors: output.error ? [output.error] : [],
-    })),
-  ];
-  for (const item of pickerItems) {
-    const button = cloneTemplate("node-button-template");
-    button.textContent = item.displayName ?? item.id;
-    button.classList.toggle("bad", !!item.errors?.length);
-    button.dataset.nodeKey = item.key;
-    $("node-picker").append(button);
-    pickerElements.set(item.key, button);
-  }
-  const defaults = Object.fromEntries(
-    model.inputs.map((id) => [id, APP_CONFIG.signals.defaultValue]),
-  );
-  if (model.inputs.join(",") === Object.keys(APP_CONFIG.signals.example).join(",")) {
-    Object.assign(defaults, APP_CONFIG.signals.example);
-  }
-  $("input-json").value = JSON.stringify(defaults);
-  $("queue").scrollTop = 0;
-  const display = loadDisplay(raw.display?.outputBoard);
-  view?.setModel(model);
-  const shows = [...$("layout-buttons").querySelectorAll("[data-layout]")].map(button => button.dataset.layout);
-  view?.requestLayout(shows.includes(raw.display?.show) ? raw.display.show : APP_CONFIG.scene.layout);
-  view?.syncOutputs(engine);
-  view?.setOutputDisplay(display.config);
-  displayUI.load(display.config, model.outputs, display.error);
-  select(selected, false);
-  frameUpdates.request();
-  document.querySelector(".left-panel").scrollTop = 0;
-  message(
-    display.error ?? "已加载模型。发送信号或暂停后单步执行。",
-    !!display.error,
-  );
 }
-$("inspector-lamp-edit").addEventListener("click", () => {
-  if (selected?.startsWith("lamp:")) displayUI.open(Number(selected.slice(5)));
+$('image-threshold').value = APP_CONFIG.image.threshold; $('image-pixels').value = APP_CONFIG.image.maxPixels;
+$('speed').addEventListener('input', () => { $('speed-value').textContent = `${$('speed').value}×`; updatePlayback(); });
+$('skip').addEventListener('change', updatePlayback);
+$('example-select').addEventListener('change', () => boundary(() => {
+  const raw = builtins.find(item => item.jkm === $('example-select').value);
+  loadModel(raw, raw.jkm === APP_CONFIG.model.example ? 'assets/ascii-bit-design/digits.jkm.json' : `examples/${raw.jkm}.jkm.json`, true);
+}).catch(error => message(error.message, true)));
+$('backend').addEventListener('change', () => boundary(async () => {
+  if ($('backend').value === 'webgpu') await gpu.init();
+  else $('compute-message').textContent = 'JavaScript 串行计算；事件优先。';
+  render();
+}).catch(error => message(error.message, true)));
+action('gpu-retry', () => view.recover());
+action('camera-reset', () => view.fit());
+action('node-labels', () => { const hidden = $('node-labels').getAttribute('aria-pressed') !== 'true'; $('node-labels').setAttribute('aria-pressed', String(hidden)); $('node-labels').textContent = hidden ? '显示名称和次数' : '隐藏名称和次数'; view.setLabels(!hidden); });
+action('black-background', () => { const black = $('black-background').getAttribute('aria-pressed') !== 'true'; $('black-background').setAttribute('aria-pressed', String(black)); view.setBlackBackground(black); });
+const inspectorWindow = jkmPanel.querySelector('[data-cosmic-window="inspector"]');
+inspectorWindow.classList.add('inspector');
+nodeInspector.classList.remove('inspector');
+const sceneWindow = jkmPanel.querySelector('[data-cosmic-window="scene"]');
+// Dual-panel fullscreen shows the renderer. Single-panel fullscreen preserves
+// the current desktop, including each window's visibility and collapsed state.
+$('scene-fullscreen').addEventListener('click', () => {
+  if ($('scene-fullscreen').getAttribute('aria-pressed') === 'true' || desktop.single) return;
+  desktop.show('scene');
+  if (sceneWindow.dataset.collapsed === 'true') desktop.collapse('scene');
 });
-for (const host of [$("queue-rows"), $("node-picker")]) {
-  host.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-node-key]");
-    if (button && host.contains(button)) select(button.dataset.nodeKey);
-  });
-}
-$("queue").addEventListener("scroll", () => frameUpdates.invalidate());
-new ResizeObserver(() => frameUpdates.invalidate()).observe($("queue"));
-$("image-input").onclick = () => imageUI.open();
-$("send").onclick = () => {
-  try {
-    const e = playback.send(JSON.parse($("input-json").value));
-    message(
-      `已更新 ${e.accepted.length} 个 Xi 并加入 Xi.FIFO 复制任务${!playback.running ? "；保持暂停" : ""}。`,
-    );
-  } catch (e) {
-    message(e.message, true);
-  }
-};
-$("play").onclick = () => {
-  try {
-    playback.running ? playback.pause() : playback.resume();
-  } catch (e) {
-    message(e.message, true);
-  }
-};
-$("step").onclick = () => {
-  try {
-    playback.step();
-  } catch (e) {
-    playback.pause();
-    message(e.message, true);
-  }
-};
-$("reset").onclick = () => {
-  playback.reset();
-  message("已恢复快照中的 q 与 FIFOS；Xi 尚不可读，到达集合和本次显示记录已清空；保持暂停。");
-};
-function updateSpeedControl() {
-  const skip = $("skip").checked,
-    speed = Number($("speed").value),
-    budget =
-      playback?.skipFrameBudgetMs ?? APP_CONFIG.playback.skipBudgetMs * speed;
-  $("speed-label").textContent = skip ? "计算速度" : "动画速度";
-  $("speed-value").textContent = speed + "×";
-  $("speed-budget").hidden = !skip;
-  $("speed-budget").textContent = `每帧预算 ${budget} ms`;
-  $("speed").setAttribute(
-    "aria-valuetext",
-    skip ? `${speed} 倍，每帧计算预算 ${budget} 毫秒` : `动画速度 ${speed} 倍`,
-  );
-  $("speed").title = skip
-    ? `每帧最多计算约 ${budget} 毫秒；高倍速可能降低画面流畅度，单项计算不会中断。`
-    : "调节传播动画的播放速度";
-}
-$("speed").oninput = () => {
-  if (playback) playback.speed = Number($("speed").value);
-  updateSpeedControl();
-};
-$("skip").onchange = () => {
-  if (playback) playback.skip = $("skip").checked;
-  updateSpeedControl();
-  frameUpdates.invalidate();
-};
-function layoutStatus(result) {
-  for (const button of $("layout-buttons").querySelectorAll("[data-layout]"))
-    button.setAttribute(
-      "aria-pressed",
-      String(button.dataset.layout === result.requestedMode),
-    );
-  $("layout-buttons").setAttribute("aria-busy", String(!!result.pending));
-  if (result.pending) {
-    $("layout-status").textContent = "正在排列…";
-    return;
-  }
-  if (result.error) {
-    $("layout-status").textContent = `布局失败：${result.error}`;
-    return;
-  }
-  $("layout-status").textContent =
-    `${result.automatic ? "自动 → " : ""}${result.mode} · 间距 1`;
-  $("layout-status").title =
-    `${result.description}；实际连线总长 ${result.metrics.wireLength.toFixed(2)}；自动可读性评分为启发式结果`;
-  $("viewport").dataset.layout = result.mode;
-}
-$("layout-buttons").onclick = (event) => {
-  const button = event.target.closest("[data-layout]");
-  if (button && view?.model) view.requestLayout(button.dataset.layout);
-};
-$("output-render").onclick = () => displayUI.open();
-$("camera-reset").onclick = () => view?.resetCamera();
-setupSceneFullscreen(
-  document.querySelector(".main-view"),
-  $("scene-fullscreen"),
-  document.querySelector(".inspector"),
-);
-$("node-labels").onclick = () => {
-  const button = $("node-labels"),
-    hidden = button.getAttribute("aria-pressed") !== "true";
-  button.setAttribute("aria-pressed", String(hidden));
-  button.textContent = hidden ? "显示名称和次数" : "隐藏名称和次数";
-  view?.setNodeLabelsHidden(hidden);
-};
-$("black-background").onclick = () => {
-  const enabled = $("black-background").getAttribute("aria-pressed") !== "true";
-  $("black-background").setAttribute("aria-pressed", String(enabled));
-  view?.setBlackBackground(enabled);
-};
-function currentSnapshot(raw = model.raw) {
-  return exportCurrentModel(raw, model?.raw, engine,
-    view?.layoutMode ?? model?.raw.display?.show, displayUI.config);
-}
-const modelManager = new ModelManager(install, message, currentSnapshot);
-function pauseAfterError(error, prefix) {
-  let detail = "";
-  try {
-    playback?.pause();
-  } catch (syncError) {
-    detail = `；状态同步失败：${syncError.message}`;
-  } finally {
-    frameUpdates.invalidate();
-  }
-  message(`${prefix}：${error.message}${detail}`, true);
-}
-function renderingFailed(error) {
-  pauseAfterError(error, "3D 渲染中断");
-  $("backend").textContent = "渲染已停止";
-  $("gpu-message").hidden = false;
-  $("gpu-detail").textContent = error.message;
-  message(
-    `3D 渲染中断：${error.message}。可点击“恢复 3D”，模型与计算状态仍保留。`,
-    true,
-  );
-}
-$("gpu-retry").onclick = async () => {
-  $("gpu-retry").disabled = true;
-  try {
-    await view.recover();
-    $("gpu-message").hidden = true;
-    message("3D 已恢复，计算保持暂停，可继续或单步。");
-  } catch (e) {
-    renderingFailed(e);
-  } finally {
-    $("gpu-retry").disabled = false;
-  }
-};
-async function start() {
-  view = new NetworkView($("viewport"), select, renderingFailed, layoutStatus, backend => {
-    $("backend").textContent = backend === "canvas" ? "Canvas 2D · 软件渲染" : "WebGPU · 已连接";
-  });
-  $("backend").textContent = "渲染器初始化中";
-  await modelManager.loadInitial();
-  frameUpdates.flush();
-  let previous = performance.now(),
-    lastStatus = "";
-  function frame(now) {
+const sceneFullscreenControl = setupSceneFullscreen(sceneWindow, $('scene-fullscreen'), undefined, [], {
+  resolveTarget: () => desktop.single
+    ? { element: jkmPanel.querySelector('.cosmic-scene-area'), className: 'cosmic-panel-fullscreen', label: `左侧${APP_CONFIG.desktop.display.modes.single.label}` }
+    : { element: sceneWindow, className: 'scene-fullscreen', label: `${APP_CONFIG.desktop.display.modes.dual.label} 3D 场景` },
+});
+jkmPanel.addEventListener('cosmic-display-mode-change', () => sceneFullscreenControl.refresh());
+action('play', () => play());
+action('step', () => boundary(async () => { advanceScript(); inFlight = processUnit(true); try { await inFlight; } finally { inFlight = null; if (running) schedule(); } render(); message('已处理一个完整单元。'); }));
+action('reset', () => boundary(() => { engine.reset(); scriptBatches = null; nextBatch = 0; render(); message('已恢复 JKM 初值。'); }));
+action('send', () => boundary(() => { const count = engine.injectBatch(JSON.parse($('input-json').value)); scriptBatches = null; render(); message(`已注入 ${count} 条入口通知。`); }));
+action('trace-download', () => boundary(() => download(`${model.name}.trace.jsonl`, engine.trace.map(record => JSON.stringify(record)).join('\n') + (engine.trace.length ? '\n' : ''), 'application/x-ndjson')));
+action('import-btn', () => { $('model-json').value = pretty(model.raw); $('model-error').textContent = ''; show('models-dialog'); });
+action('model-apply', () => boundary(() => { loadModel(JSON.parse($('model-json').value)); close('models-dialog'); }), 'model-error');
+action('model-download', () => download(`${model.name}.jkm.json`, model.raw));
+function jsonFileInput(id, apply, errorId) {
+  $(id).addEventListener('change', async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const generation = (fileVersions.get(id) || 0) + 1;
+    fileVersions.set(id, generation);
     try {
-      const dt = Math.min((now - previous) / 1000, 0.1);
-      previous = now;
-      try {
-        playback.tick(dt);
-      } catch (e) {
-        pauseAfterError(e, "执行错误");
-      }
-      const status = `${playback.running}:${!!playback.active}:${playback.visuals.length}:${engine.length}`;
-      if (status !== lastStatus) {
-        lastStatus = status;
-        frameUpdates.invalidate();
-      }
-      try {
-        frameUpdates.flush();
-      } catch (e) {
-        pauseAfterError(e, "界面更新错误");
-      }
-      try {
-        view.render(playback.running);
-      } catch (e) {
-        view.fail(e);
-      }
-    } finally {
-      requestAnimationFrame(frame);
-    }
-  }
-  requestAnimationFrame(frame);
-  try {
-    await view.init();
-    view.setModel(model);
-    view.refresh(engine);
-    view.select(selected);
-  } catch (e) {
-    $("backend").textContent = "渲染不可用";
-    $("gpu-message").hidden = false;
-    $("gpu-detail").textContent = e.message;
-  }
+      const raw = await readFile(file);
+      if (fileVersions.get(id) === generation) await apply(raw, file, () => fileVersions.get(id) === generation);
+    } catch (error) { if (fileVersions.get(id) === generation) $(errorId).textContent = error.message; }
+    finally { if (fileVersions.get(id) === generation) event.target.value = ''; }
+  });
 }
-start().catch((e) => message(`启动失败：${e.message}`, true));
+jsonFileInput('model-file', (raw, file, current) => boundary(() => { if (!current()) return; loadModel(raw, file.name); close('models-dialog'); }), 'model-error');
+
+action('script-open', () => { $('script-error').textContent = ''; show('script-dialog'); });
+$('model-path').addEventListener('change', () => { modelPath = $('model-path').value.trim(); });
+jsonFileInput('script-file', raw => { validateRunScript(raw, model); $('script-json').value = pretty(raw); }, 'script-error');
+action('script-download', () => { const script = validateRunScript(JSON.parse($('script-json').value), model); download(`${script.run}.run.json`, script); }, 'script-error');
+action('script-run', () => boundary(() => {
+  const script = validateRunScript(JSON.parse($('script-json').value), model);
+  modelPath = $('model-path').value.trim();
+  if (script.model !== modelPath) throw new Error('脚本 model 与当前 JKM 文件标识不一致；请先加载对应模型并核对标识。');
+  const next = new JKEngine(model, { observe: script.observe, historyLimit: APP_CONFIG.view.traceRows });
+  engine = next; observation = structuredClone(script.observe); scriptBatches = script.batches; nextBatch = 0;
+  $('watch-json').value = pretty(observation.watch); $('read-json').value = pretty(observation.read);
+  close('script-dialog'); message(`正在执行脚本 ${script.run} · ${script.batches.length} 批。`); play();
+}), 'script-error');
+action('snapshot-open', () => boundary(() => { $('snapshot-json').value = pretty(engine.snapshot(APP_CONFIG.model.snapshotName)); $('snapshot-error').textContent = ''; show('snapshot-dialog'); }));
+action('snapshot-capture', () => boundary(() => { $('snapshot-json').value = pretty(engine.snapshot(APP_CONFIG.model.snapshotName)); }), 'snapshot-error');
+action('snapshot-download', () => { const snapshot = validateSnapshot(JSON.parse($('snapshot-json').value), model); download(`${snapshot.snapshot}.snapshot.json`, snapshot); }, 'snapshot-error');
+jsonFileInput('snapshot-file', raw => { validateSnapshot(raw, model); $('snapshot-json').value = pretty(raw); }, 'snapshot-error');
+action('snapshot-restore', () => boundary(() => { engine.restore(JSON.parse($('snapshot-json').value)); scriptBatches = null; nextBatch = 0; render(); close('snapshot-dialog'); message('现场已恢复并暂停；观察历史从此处重新记录。'); }), 'snapshot-error');
+action('observe-open', () => { $('watch-json').value = pretty(observation.watch); $('read-json').value = pretty(observation.read); $('observe-error').textContent = ''; show('observe-dialog'); });
+action('observe-apply', () => boundary(() => { const observe = { watch: JSON.parse($('watch-json').value), read: JSON.parse($('read-json').value) }; const next = new JKEngine(model, { observe, historyLimit: APP_CONFIG.view.traceRows }); const script = validateRunScript({ ...currentScript(), observe }, model); engine = next; observation = observe; scriptBatches = null; $('script-json').value = pretty(script); render(); close('observe-dialog'); message('已更新观察配置，并恢复 JKM 初值。'); }), 'observe-error');
+
+async function poolRequest(command, token) {
+  if (poolPending) throw new Error('共享池操作正在进行，请稍后重试');
+  poolPending = true;
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), APP_CONFIG.pool.timeoutMs);
+  try {
+    const headers = command ? { 'Content-Type': 'application/json' } : {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(import.meta.env.VITE_MODEL_POOL_API_URL || APP_CONFIG.pool.endpoint, { method: command ? 'POST' : 'GET', headers, ...(command ? { body: JSON.stringify(command) } : {}), cache: 'no-store', signal: controller.signal });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `模型池 HTTP ${response.status}`);
+    pool = parseModelPool(data.pool); renderPool(data.selectedId); message('JKRD7 共享模型池已更新。'); return data;
+  } catch (error) { $('pool-message').textContent = `共享操作未确认：${error.message}。可继续本地导入/下载；刷新核对后再操作。`; throw error; }
+  finally { clearTimeout(timeout); poolPending = false; }
+}
+function renderPool(id) {
+  options($('pool-select'), [['', '选择共享模型'], ...pool.permanent.map(entry => [entry.id, `永久 / ${entry.model.jkm}`]), ...pool.temporary.map(entry => [entry.id, `临时 / ${entry.model.jkm}`])], id || '');
+  $('pool-message').textContent = `JKRD7 共享池 · revision ${pool.revision} · ${pool.permanent.length + pool.temporary.length} 个模型`;
+}
+function selectedEntry() { if (!pool) throw new Error('请先连接共享池'); const entry = [...pool.permanent, ...pool.temporary].find(item => item.id === $('pool-select').value); if (!entry) throw new Error('请先选择共享模型'); return entry; }
+action('pool-refresh', () => poolRequest(), 'model-error');
+action('pool-load', () => boundary(() => { loadModel(selectedEntry().model); close('models-dialog'); }), 'model-error');
+action('pool-import', async () => { const definition = structuredClone(model.raw); if (!pool) await poolRequest(); await poolRequest({ action: 'import', revision: pool.revision, model: definition }); }, 'model-error');
+function askAuth(command) { authCommand = command; $('pool-token').value = ''; $('auth-error').textContent = ''; $('auth-title').textContent = command.action === 'delete' ? '删除永久模型' : '转为永久模型'; show('auth-dialog'); }
+action('pool-promote', () => { const entry = selectedEntry(); askAuth({ action: 'promote', revision: pool.revision, id: entry.id }); }, 'model-error');
+action('pool-delete', async () => { const entry = selectedEntry(); const command = { action: 'delete', revision: pool.revision, id: entry.id }; if (pool.permanent.some(item => item.id === entry.id)) askAuth(command); else await poolRequest(command); }, 'model-error');
+$('auth-dialog').addEventListener('close', () => { $('pool-token').value = ''; authCommand = null; });
+$('auth-form').addEventListener('submit', async event => { event.preventDefault(); const command = authCommand, token = $('pool-token').value; $('pool-token').value = ''; try { await poolRequest(command, token); close('auth-dialog'); } catch (error) { $('auth-error').textContent = error.message; } });
+
+action('image-input', () => { $('image-error').textContent = ''; show('image-dialog'); });
+$('image-file').addEventListener('change', async event => { try { const file = event.target.files[0]; if (!file) return; const generation = ++imageLoadVersion; if (file.size > APP_CONFIG.view.fileBytes) throw new Error('图片文件超过限制'); const bitmap = await createImageBitmap(file); if (generation !== imageLoadVersion) { bitmap.close(); return; } if (bitmap.width * bitmap.height > APP_CONFIG.image.limits.decodedPixels) { bitmap.close(); throw new Error('图片解码尺寸超过限制'); } imageBitmap?.close(); imageBitmap = bitmap; const canvas = $('image-preview'), ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, canvas.width, canvas.height); const scale = Math.min(canvas.width / imageBitmap.width, canvas.height / imageBitmap.height); ctx.drawImage(imageBitmap, 0, 0, imageBitmap.width * scale, imageBitmap.height * scale); } catch (error) { $('image-error').textContent = error.message; } finally { event.target.value = ''; } });
+action('image-convert', () => {
+  if (!imageBitmap) throw new Error('请先选择图片');
+  const zero = $('image-zero').value, one = $('image-one').value;
+  if (!model.inputs.includes(zero) || !model.inputs.includes(one) || zero === one) throw new Error('请选择两个不同的合法独热入口');
+  const max = Number($('image-pixels').value), threshold = Number($('image-threshold').value);
+  if (!Number.isInteger(max) || max < 1 || max > APP_CONFIG.image.limits.pixels.max || !Number.isInteger(threshold) || threshold < 0 || threshold > APP_CONFIG.image.limits.threshold.max) throw new Error('请检查像素上限与灰度阈值');
+  const count = Math.min(max, imageBitmap.width * imageBitmap.height);
+  const canvas = new OffscreenCanvas(Math.min(imageBitmap.width, count), Math.ceil(count / imageBitmap.width));
+  const ctx = canvas.getContext('2d'); ctx.fillStyle = APP_CONFIG.image.background; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(imageBitmap, 0, 0);
+  const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const batches = pixelsToBatches(pixels, count, { zero, one, threshold });
+  $('script-json').value = pretty(currentScript(batches)); close('image-dialog'); show('script-dialog');
+}, 'image-error');
+
+let rgbWorkspace = null, workspaceVersion = 0, activeWorkspace = APP_CONFIG.workspace.active;
+async function switchWorkspace(mode) {
+  const generation = ++workspaceVersion;
+  if (mode === 'rgb') {
+    await sceneFullscreenControl.exit();
+    if (generation !== workspaceVersion) return;
+    await boundary(() => {});
+    if (generation !== workspaceVersion) return;
+  } else if (rgbWorkspace) {
+    await rgbWorkspace.setActive(false);
+    if (generation !== workspaceVersion) return;
+  }
+  activeWorkspace = mode;
+  $('app').dataset.workspace = mode;
+  for (const key of ['rgb', 'jkm']) {
+    const active = key === mode;
+    $(`${key}-panel`).hidden = !active;
+    $(`${key}-header-model`).hidden = !active;
+    $(`${key}-tab`).setAttribute('aria-selected', String(active));
+    $(`${key}-tab`).tabIndex = active ? 0 : -1;
+  }
+  $('import-btn').hidden = mode !== 'jkm'; $('rgb-import-btn').hidden = mode !== 'rgb';
+  desktop.setActive(mode === 'jkm');
+  view.setAnimationEnabled(mode === 'jkm');
+  if (mode === 'rgb') {
+    if (!rgbWorkspace) {
+      const { RGBWorkspaceUI } = await import('../src/ui/rgb-workspace-ui.js');
+      if (generation !== workspaceVersion) return;
+      rgbWorkspace = new RGBWorkspaceUI();
+    }
+    await rgbWorkspace.ready;
+    if (generation !== workspaceVersion) return;
+    await rgbWorkspace.setActive(true);
+  } else { view.resize(); render(); }
+}
+for (const mode of ['rgb', 'jkm']) {
+  const tab = $(`${mode}-tab`);
+  tab.addEventListener('click', () => switchWorkspace(mode).catch(error => {
+    message(error.message, true); $('rgb-message').textContent = error.message;
+  }));
+  tab.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 'rgb' : event.key === 'End' ? 'jkm' : mode === 'rgb' ? 'jkm' : 'rgb';
+    $(`${next}-tab`).focus(); $(`${next}-tab`).click();
+  });
+}
+
+try {
+  loadModel(builtins.find(item => item.jkm === APP_CONFIG.model.example), 'assets/ascii-bit-design/digits.jkm.json', true);
+  await view.ready;
+  if (activeWorkspace !== 'jkm') await switchWorkspace(activeWorkspace);
+} catch (error) { message(`初始化失败：${error.message}`, true); }
+window.addEventListener('pagehide', () => { pause(); desktop.dispose(); nodeTree.dispose(); rgbWorkspace?.dispose(); view.dispose(); gpu.dispose(); imageBitmap?.close(); });

@@ -1,9 +1,9 @@
 import { APP_CONFIG } from '../../html/config.js';
 import * as THREE from 'three/webgpu';
 import { OutputBoard } from './output-board.js';
-import { DisplayState, defaultDisplay } from '../ui/output-display.js';
+import { DisplayState, defaultDisplay } from './display-state.js';
 import { EditorControls } from './editor-controls.js';
-import { compareNodes } from '../jk/node-id.js';
+import { compareDisplayNodes as compareNodes } from './model-view.js';
 import { createLayout, DEFAULT_LAYOUT_MODE } from './layout.js';
 import { disposeGroup } from './resources.js';
 import { FloatingEdgeCurve, assignEdgeLanes, updateTubeGeometry } from './edge-curves.js';
@@ -11,11 +11,12 @@ import { NetworkBatches } from './network-batches.js';
 import { NodeLabels } from './node-labels.js';
 import { RenderSchedule } from './render-schedule.js';
 import { createRenderer, disposeRenderer } from './renderer-backend.js';
+import { adjustNetworkLayout, edgeStyleType, resolveNodeStyle } from './network-style.js';
 const NODE_SIZE = .10;
 const TITLE_OFFSET = -.19, COUNT_OFFSET = -.36;
 // Find the last approach to the target box, including self-loop curves.
-function arrowEnd(curve, center) {
-  const box = new THREE.Box3().setFromCenterAndSize(center, new THREE.Vector3().setScalar(NODE_SIZE + .035));
+export function arrowEnd(curve, center, size = 1) {
+  const box = new THREE.Box3().setFromCenterAndSize(center, new THREE.Vector3().setScalar(NODE_SIZE * size + .035));
   let inside = 1, outside = 0;
   for (let i = 99; i >= 0; i--) {
     const t = i / 100;
@@ -39,6 +40,7 @@ function label(text, color = '#a5bcd3', size = 22) {
   const map = new THREE.CanvasTexture(canvas);
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, transparent: true, depthTest: false }));
   sprite.scale.set(1.35, .3375, 1); sprite.renderOrder = 4;
+  sprite.userData.label = { text, color, size };
   return sprite;
 }
 export class NetworkView {
@@ -53,9 +55,115 @@ export class NetworkView {
     this.group = new THREE.Group(); this.scene.add(this.group);
     this.signalGroup = new THREE.Group(); this.scene.add(this.signalGroup);
     this.visuals = new Map(); this.edges = []; this.signals = [];
+    this.appearance = null; this.labelAppearance = new WeakMap();
+    this.networkStyles = null; this.originalLayout = null;
     this.nodeLabelsHidden=APP_CONFIG.scene.nodeLabelsHidden;
     this.outputBoard=new OutputBoard(this.scene);this.outputState=new DisplayState(defaultDisplay());this.pendingLampDirty=new Set();
     this.raycaster = new THREE.Raycaster(); this.pointer = new THREE.Vector2();
+  }
+  /** Appearance is presentation-only and may arrive before renderer/model initialization. */
+  applyAppearance(appearance) {
+    const defaults = { ...APP_CONFIG.desktop.appearance, ...APP_CONFIG.desktop.windows.scene.appearance };
+    const previous = this.appearance ?? defaults;
+    const color = (value, fallback) => typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value.toLowerCase() : fallback;
+    const numeric = (value, key) => {
+      const range = APP_CONFIG.desktop.windows.scene.appearanceLimits?.[key] ?? APP_CONFIG.desktop.appearance.limits[key];
+      return typeof value === 'number' && Number.isFinite(value) ? THREE.MathUtils.clamp(value, range.min, range.max) : previous[key];
+    };
+    const next = {
+      background: color(appearance?.background, previous.background),
+      opacity: numeric(appearance?.opacity, 'opacity'),
+      foreground: color(appearance?.foreground, previous.foreground),
+      fontScale: numeric(appearance?.fontScale, 'fontScale'),
+    };
+    if (this.appearance && Object.keys(next).every(key => next[key] === previous[key])) return { changed: false, blackBackgroundChanged: false };
+    // CSS paints the configured gradient once. A deliberate background edit
+    // exits the opaque black override; initial restoration preserves that mode.
+    const blackBackgroundChanged = Boolean(this.appearance && this.blackBackground
+      && (next.background !== previous.background || next.opacity !== previous.opacity));
+    this.appearance = next;
+    if (blackBackgroundChanged) this.setBlackBackground(false);
+    this.syncLabelAppearance();
+    this.renderSchedule.invalidate();
+    return { changed: true, blackBackgroundChanged };
+  }
+  labelColor(base) {
+    // Unconfigured views retain semantic colors; configured labels use their foreground.
+    return this.appearance ? this.appearance.foreground : base;
+  }
+  styleNodeLabel(handle, original) {
+    if (!handle) return;
+    let base = this.labelAppearance.get(handle);
+    if (!base) {
+      base = { size: handle.fontSize, color: handle.textColor.clone() };
+      this.labelAppearance.set(handle, base);
+    }
+    if (original) { base.size = original.size; base.color.set(original.color); }
+    handle.fontSize = base.size * (this.appearance?.fontScale ?? 1);
+    handle.textColor.set(this.labelColor(base.color));
+  }
+  styleSignalLabel(signal) {
+    const handle = signal.text, original = handle.userData.label;
+    let base = this.labelAppearance.get(handle);
+    if (!base) {
+      base = { scale: handle.scale.clone(), color: original.color };
+      this.labelAppearance.set(handle, base);
+    }
+    const color = this.labelColor(original.color);
+    if (base.color !== color) {
+      paintLabel(handle.material.map.image, original.text, color, original.size);
+      handle.material.map.needsUpdate = true; base.color = color;
+    }
+    handle.scale.copy(base.scale).multiplyScalar(this.appearance?.fontScale ?? 1);
+  }
+  syncLabelAppearance() {
+    for (const visual of this.visuals.values()) {
+      this.styleNodeLabel(visual.title); this.styleNodeLabel(visual.count); this.styleNodeMarker(visual);
+    }
+    for (const signal of this.signals) this.styleSignalLabel(signal);
+  }
+  styleNodeMarker(visual, style = resolveNodeStyle(visual, this.networkStyles)) {
+    if (!visual.q) return;
+    const defaults = APP_CONFIG.scene.styles.nodes.computationTypes.ex.marker;
+    const marker = this.networkStyles?.computation?.ex?.marker;
+    this.styleNodeLabel(visual.q);
+    if (marker?.color !== undefined) visual.q.textColor.set(marker.color);
+    visual.q.visible = visual.mesh.visible && (marker?.visible ?? (defaults.visible && style?.labels !== false));
+  }
+  setNetworkStyles(state) {
+    const next = state ? structuredClone(state) : null;
+    if (JSON.stringify(next) === JSON.stringify(this.networkStyles)) return;
+    const before = this.networkStyles;
+    this.networkStyles = next;
+    const geometry = value => JSON.stringify({ lengths: ['J', 'K', 'trigger', 'source', 'observe'].map(key => value?.edges?.[key]?.length ?? 1),
+      sizes: [...this.visuals.values()].map(node => resolveNodeStyle(node, value)?.size ?? 1) });
+    if (this.originalLayout && geometry(before) !== geometry(next)) this.applyLayout(this.originalLayout, { preserveMotion: true });
+    else this.refresh(this.engine);
+  }
+  placeVisualLabels(visual) {
+    const offset = NODE_SIZE * (visual.mesh.scale.y - 1) / 2;
+    visual.title.position.copy(visual.mesh.position).add(new THREE.Vector3(0, TITLE_OFFSET - offset, 0));
+    visual.count.position.copy(visual.mesh.position).add(new THREE.Vector3(0, COUNT_OFFSET - offset, 0));
+    visual.q?.position.copy(visual.mesh.position);
+  }
+  styleVisual(visual) {
+    const style = resolveNodeStyle(visual, this.networkStyles);
+    visual.mesh.visible = style?.visible !== false;
+    visual.mesh.scale.setScalar(style?.size ?? 1);
+    visual.styleColor = style ? new THREE.Color(style.color).getHex() : visual.base;
+    visual.title.visible = visual.count.visible = visual.mesh.visible && style?.labels !== false && !this.nodeLabelsHidden;
+    this.styleNodeMarker(visual, style);
+    this.placeVisualLabels(visual);
+    visual.mesh.updateMatrixWorld();
+  }
+  syncSignalStyles() {
+    for (const signal of this.signals) {
+      const visible = signal.edge.visible !== false;
+      const opacity = this.networkStyles ? Math.min(1, (signal.edge.styleOpacity ?? .4) / .4) : 1;
+      signal.text.visible = signal.tip.visible = visible;
+      signal.text.material.opacity = opacity;
+      signal.tip.material.transparent = opacity < 1; signal.tip.material.opacity = opacity;
+    }
   }
   async init(options) {
     let result = await createRenderer(this, options);
@@ -176,21 +284,23 @@ export class NetworkView {
     };
     worker.postMessage({model:this.model,mode});
   }
-  applyLayout(layout) {
+  applyLayout(layout, { preserveMotion = false } = {}) {
+    this.originalLayout = layout;
+    layout = adjustNetworkLayout(layout, this.edges, this.networkStyles, APP_CONFIG.scene.styles.layout);
     this.layout=layout;
     for(const [key,v] of this.visuals){
       const p=layout.positions.get(key);if(!p)continue;
       v.mesh.position.set(p.x,p.y,p.z);
-      v.title.position.copy(v.mesh.position).add(new THREE.Vector3(0,TITLE_OFFSET,0));
-      v.count.position.copy(v.mesh.position).add(new THREE.Vector3(0,COUNT_OFFSET,0));
-      v.q?.position.copy(v.mesh.position);
+      this.styleVisual(v);
       v.mesh.updateMatrixWorld();this.batches?.setNode(v.batchIndex,v.mesh);
     }
     const byId=new Map();for(const v of this.visuals.values())if(!byId.has(v.id))byId.set(v.id,v.mesh.position);
     for(const [index,edge] of this.edges.entries()){
+      const prior=edge.curve;
       edge.curve=this.edgeCurve(byId.get(edge.source),this.visuals.get(edge.targetKey).mesh.position,edge.laneIndex,edge.laneCount,edge.sourceKey,edge.targetKey);
+      if(preserveMotion){edge.curve.seed=prior.seed;edge.curve.speed=prior.speed;}
       if(edge.highlight){this.group.remove(edge.highlight);edge.highlight.geometry.dispose();edge.highlight.material.dispose();edge.highlight=null;}
-      edge.endT=arrowEnd(edge.curve,this.visuals.get(edge.targetKey).mesh.position);
+      edge.endT=arrowEnd(edge.curve,this.visuals.get(edge.targetKey).mesh.position,this.visuals.get(edge.targetKey).mesh.scale.x);
       edge.arrow.position.copy(edge.curve.getPoint(edge.endT));
       edge.arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),edge.curve.getTangent(edge.endT).normalize());
       this.batches?.setEdge(index,edge.curve,edge.endT,edge.arrow);
@@ -212,27 +322,33 @@ export class NetworkView {
     const sorted = [...model.nodes].sort(compareNodes);
     this.layoutMode=DEFAULT_LAYOUT_MODE;
     this.layout=createLayout(model,this.layoutMode);
+    this.originalLayout=this.layout;
     this.nodeGeometry=new THREE.BoxGeometry(NODE_SIZE,NODE_SIZE,NODE_SIZE);
     const positions = new Map(),keysById=new Map();
-    const add = (key,id,type,pos,state,error,displayName=id) => {
+    const add = (key,id,type,pos,hasEX,error,displayName=id) => {
       // Lightweight off-scene proxies retain exact per-node picking and positions.
       const mesh = new THREE.Mesh(this.nodeGeometry, new THREE.MeshBasicMaterial({color:error?colors.error:colors[type]}));
       mesh.position.copy(pos); mesh.userData.key = key;mesh.updateMatrixWorld();
       const title = this.labels.add(displayName); title.position.copy(pos).add(new THREE.Vector3(0,TITLE_OFFSET,0));
       const count = this.labels.add(type==='Q'?'0 次':'',{color:'#5c7a96',size:17}); count.position.copy(pos).add(new THREE.Vector3(0,COUNT_OFFSET,0));
       title.visible=count.visible=!this.nodeLabelsHidden;
-      const q = state ? this.labels.add('q',{color:'#173145',size:30,renderOrder:6}) : null;
+      const marker = APP_CONFIG.scene.styles.nodes.computationTypes.ex.marker;
+      const q = hasEX ? this.labels.add(APP_CONFIG.scene.nodeMarker.text,{color:marker.color,size:marker.size,renderOrder:6}) : null;
       if(q){q.scale.set(.46,.115,1);q.position.copy(pos);}
-      this.visuals.set(key,{mesh,title,count,q,id,type,error,base:colors[type],lastCount:0,batchIndex:this.visuals.size});
+      this.visuals.set(key,{mesh,title,count,q,id,type,hasEX,error,base:colors[type],lastCount:0,batchIndex:this.visuals.size});
       if(!positions.has(id)){positions.set(id,pos);keysById.set(id,key);}
     };
     const at=key=>{const p=this.layout.positions.get(key);return new THREE.Vector3(p.x,p.y,p.z);};
-    sorted.forEach(n=>add(n.key,n.id,'Q',at(n.key),n.initial!==null,!!n.errors.length,n.displayName??n.id));
+    sorted.forEach(n=>{
+      add(n.key,n.id,'Q',at(n.key),n.hasEX,!!n.errors.length,n.displayName??n.id);
+      const visual=this.visuals.get(n.key);visual.tags=n.tags??[];visual.isInput=!!n.isInput;
+      if(n.isInput){visual.base=colors.X;visual.mesh.material.color.setHex(colors.X);}
+    });
     model.inputs.forEach(id=>add(id,id,'X',at(id),false,false));
-    model.outputs.forEach(o=>add(o.id,o.id,'Y',at(o.id),false,!!o.error));
+    model.outputs.forEach(o=>{add(o.id,o.id,'Y',at(o.id),false,!!o.error,o.displayName??o.id);this.visuals.get(o.id).tags=o.tags??[];});
     const rawEdges=[];
-    for(const n of model.nodes)for(const t of n.tokens)if(t.source)rawEdges.push({source:t.source,target:n.id,targetKey:n.key,op:t.op,index:t.index});
-    for(const o of model.outputs)if(positions.has(o.source))rawEdges.push({source:o.source,target:o.id,targetKey:o.id,op:'Y',index:0});
+    for(const n of model.nodes)for(const t of n.tokens)if(t.source)rawEdges.push({source:t.source,target:n.id,targetKey:n.key,op:t.op,index:t.index,relation:t.relation});
+    for(const o of model.outputs)if(positions.has(o.source))rawEdges.push({source:o.source,target:o.id,targetKey:o.id,op:'Y',index:0,relation:'observe'});
     const drawable=rawEdges.filter(e=>positions.has(e.source)&&this.visuals.has(e.targetKey)).map(e=>({...e,sourceKey:keysById.get(e.source)}));
     for(const e of assignEdgeLanes(drawable)){
       const start=positions.get(e.source),end=this.visuals.get(e.targetKey)?.mesh.position;
@@ -246,13 +362,13 @@ export class NetworkView {
     this.batches=new NetworkBatches(this.visuals.size,this.edges.length);this.group.add(this.batches.group);
     for(const v of this.visuals.values())this.batches.setNode(v.batchIndex,v.mesh);
     this.edges.forEach((e,i)=>{this.batches.setEdge(i,e.curve,e.endT,e.arrow);this.batches.setEdgeStyle(i,colors[e.op],false);});
-    this.batches.commit();this.labels.flush();
+    this.batches.commit();this.syncLabelAppearance();this.labels.flush();
     const b=this.layout.bounds;
     const size=Math.max(20,b.max.x-b.min.x+8,b.max.z-b.min.z+8);
     const grid=new THREE.GridHelper(size,Math.min(100,Math.ceil(size)),0x29445a,0x172c40);grid.position.y=b.min.y-1.5;grid.material.transparent=true;grid.material.opacity=.35;this.group.add(grid);this.grid=grid;this.setBlackBackground(this.blackBackground??APP_CONFIG.scene.blackBackground);
-    this.rebuildOutputBoard();this.requestLayout();
+    this.rebuildOutputBoard();if(this.networkStyles)this.applyLayout(this.originalLayout,{preserveMotion:true});this.requestLayout();
   }
-  pickObjects(){return [...this.visuals.values()].map(v=>v.mesh).concat(this.outputBoard.pickObjects());}
+  pickObjects(){return [...this.visuals.values()].filter(v=>v.mesh.visible!==false).map(v=>v.mesh).concat(this.outputBoard.pickObjects());}
   setOutputDisplay(config){this.outputState.configure(config,this.model?.outputs??[]);this.pendingLampDirty.clear();this.syncOutputs();this.rebuildOutputBoard();}
   rebuildOutputBoard(){this.outputBoard.rebuild(this.outputState.config,this.visuals,this.layout,this.edgeTime);this.outputBoard.paint(this.outputState.results,this.outputState.results.map((_,i)=>i));this.pendingLampDirty.clear();this.outputBoard.select(this.selected);this.renderSchedule.invalidate();}
   setBlackBackground(enabled) {
@@ -265,14 +381,13 @@ export class NetworkView {
   }
   setNodeLabelsHidden(hidden) {
     this.nodeLabelsHidden=hidden;
-    for(const v of this.visuals.values())v.title.visible=v.count.visible=!hidden;
+    for(const v of this.visuals.values())this.styleVisual(v);
     this.renderSchedule.invalidate();
   }
   select(key) {this.selected=key;this.outputBoard.select(key);this.refresh(this.engine);}
   syncOutputs(engine,event) {
     if(engine)this.engine=engine;
-    // Yi consumes only published event data. GPU writes stay deferred.
-    if(event&&!event.outputChanges?.length&&!event.transfers?.some(t=>/^Y(?:0|[1-9]\d*)$/.test(t.target)))return;
+    // A read-only projection of externally observed JKRD7 values; never a runtime output port.
     for(const index of this.outputState.update(this.engine?.outputs??new Map()))this.pendingLampDirty.add(index);
   }
   refresh(engine) {
@@ -281,41 +396,50 @@ export class NetworkView {
     const selectedId=this.visuals.get(this.selected)?.id;
     const high=new Set();
     for(const [key,v]of this.visuals){
+      this.styleVisual(v);
       const count=this.engine?.counts.get(key)??0;if(count>1000)high.add(v.id);
       const selected=key===this.selected;
-      v.mesh.material.color.setHex(v.error||count>1000?colors.error:v.base);
+      v.mesh.material.color.setHex(v.error||count>1000?colors.error:v.styleColor);
       v.title.color.setHex(selected?0x85efd0:0xffffff);
       if(v.type==='Q'&&count!==v.lastCount){
-        v.count.setText(`${count} 次`,count>1000?'#ff697e':'#5c7a96',17);v.lastCount=count;
+        const countColor=count>1000?'#ff697e':'#5c7a96';
+        v.count.setText(`${count} 次`,countColor,17);this.styleNodeLabel(v.count,{color:countColor,size:17});v.lastCount=count;
       }
-      v.title.visible=v.count.visible=!this.nodeLabelsHidden;
       this.batches?.setNode(v.batchIndex,v.mesh);
     }
     for(const [index,e] of this.edges.entries()){
-      const active=!!selectedId&&(e.source===selectedId||e.targetKey===this.selected);
-      const red=high.has(e.source)||high.has(e.target),color=red?colors.error:colors[e.op];
+      const style=this.networkStyles?.edges?.[edgeStyleType(e)];
+      e.visible=style?.visible!==false&&(style?.opacity??.4)>0&&this.visuals.get(e.sourceKey)?.mesh.visible!==false&&this.visuals.get(e.targetKey)?.mesh.visible!==false;
+      e.styleOpacity=style?.opacity??.4;
+      const active=e.visible&&!!selectedId&&(e.source===selectedId||e.targetKey===this.selected);
+      const red=high.has(e.source)||high.has(e.target),color=red?colors.error:style?new THREE.Color(style.color).getHex():colors[e.op];
       e.arrow.scale.setScalar(active?1.35:1);
-      this.batches?.setEdgeStyle(index,color,active);
+      this.batches?.setEdgeStyle(index,color,active,this.networkStyles?{opacity:e.styleOpacity,visible:e.visible}:null);
       // A tube provides real thickness on WebGPU; LineBasicMaterial linewidth does not.
       if(active&&!e.highlight){
         e.highlight=new THREE.Mesh(new THREE.TubeGeometry(e.curve,36,.014,5,false),new THREE.MeshBasicMaterial({color}));
         this.group.add(e.highlight);
       }
-      if(e.highlight){if(active&&!e.highlight.visible)updateTubeGeometry(e.highlight.geometry,e.curve);e.highlight.visible=active;e.highlight.material.color.setHex(color);}
+      if(e.highlight){if(active&&!e.highlight.visible)updateTubeGeometry(e.highlight.geometry,e.curve);e.highlight.visible=active;e.highlight.material.color.setHex(color);e.highlight.material.opacity=Math.min(1,e.styleOpacity/.4);e.highlight.material.transparent=e.highlight.material.opacity<1;}
     }
+    this.syncSignalStyles();
     this.batches?.commit();this.renderSchedule.invalidate();
   }
   clearSignals(){disposeGroup(this.signalGroup);this.signals=[];this.renderSchedule.invalidate();}
   showTransfers(transfers){
     this.clearSignals();
     if(!this.available)return;
-    const lookup=new Map(transfers.map(t=>[t.source+'>'+t.target,t.value]));
     for(const edge of this.edges){
-      const value=lookup.get(edge.source+'>'+edge.target);if(value===undefined)continue;
+      if(edge.visible===false)continue;
+      const transfer=transfers.find(t=>t.source===edge.source&&t.target===edge.target
+        &&(t.relation===undefined||t.relation===edge.relation)
+        &&(t.index===undefined||t.index===edge.index));
+      const value=transfer?.value;if(value===undefined)continue;
       const text=label(String(value),'#eefcf8',34);text.scale.set(1.5,.375,1);this.signalGroup.add(text);
       const tip=new THREE.Mesh(new THREE.ConeGeometry(.04,.11,8).translate(0,-.055,0),new THREE.MeshBasicMaterial({color:0xb4ffdf}));this.signalGroup.add(tip);
-      this.signals.push({edge,text,tip,value});
+      const signal={edge,text,tip,value};this.signals.push(signal);this.styleSignalLabel(signal);
     }
+    this.syncSignalStyles();
     this.progress(0);
   }
   progress(t){this.signalProgress=t;if(this.signals.length)this.renderSchedule.invalidate();for(const {edge,text,tip}of this.signals){const at=t*edge.endT;tip.position.copy(edge.curve.getPoint(at));tip.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),edge.curve.getTangent(at).normalize());text.position.copy(edge.curve.getPoint(Math.max(0,at-.09))).add(new THREE.Vector3(0,.23,0));}}
@@ -330,7 +454,7 @@ export class NetworkView {
       this.lastEdgeUpdate=now;
       for(const [index,e] of this.edges.entries()){
         e.curve.time=this.edgeTime;e.curve.needsUpdate=true;
-        e.endT=arrowEnd(e.curve,this.visuals.get(e.targetKey).mesh.position);
+        e.endT=arrowEnd(e.curve,this.visuals.get(e.targetKey).mesh.position,this.visuals.get(e.targetKey).mesh.scale.x);
         e.arrow.position.copy(e.curve.getPoint(e.endT));e.arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),e.curve.getTangent(e.endT).normalize());
         this.batches.setEdge(index,e.curve,e.endT,e.arrow);
         if(e.highlight?.visible)updateTubeGeometry(e.highlight.geometry,e.curve);

@@ -1,11 +1,13 @@
 {
   "schema_version": 1,
   "canonical_project": "../../JK",
-  "rules": "../../JK/docs/JKRD.md",
-  "rule_version": "4.0.0",
+  "rules": "../../JK/JKRD7.md",
+  "rule_version": "7.0.0",
   "instructions": "../../JK/AGENTS.md",
   "index": "../../JK/README.md",
   "config": "../../JK/jk.config.json",
   "design": "model-format.md",
-  "compatibility": "current-version-only"
+  "compatibility": "current-version-only",
+  "previous_version_compatibility": false,
+  "execution": "single-queue JavaScript / WebGPU; no CUDA"
 }

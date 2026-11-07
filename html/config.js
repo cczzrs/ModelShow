@@ -1,81 +1,232 @@
-/** Page defaults and limits. Runtime state must copy these frozen branches. */
+/** All product defaults live here; JKM definitions remain canonical data. */
 function freezeTree(value) {
-  for (const child of Object.values(value)) {
-    if (child && typeof child === "object") freezeTree(child);
-  }
+  Object.values(value).forEach(child => { if (child && typeof child === 'object') freezeTree(child); });
   return Object.freeze(value);
 }
-
 export const APP_CONFIG = freezeTree({
-  model: {
+  workspace: { active: 'jkm' },
+  desktop: {
+    storage: { key: 'modelshow.jkm.desktop.v2', version: 2 },
+    display: {
+      mode: 'single',
+      modes: {
+        dual: {
+          label: '双板',
+          hints: {
+            windowMove: '拖动移动或跨区 · 方向键移动 · Ctrl + 左右键切换区域',
+            sceneMove: '拖动移动 · 方向键移动',
+            windowResize: '拖动调整大小 · 方向键调整',
+            sceneResize: '拖动调整大小 · 方向键调整',
+          },
+          windows: {},
+        },
+        single: {
+          label: '单板',
+          hints: {
+            windowMove: '拖动移动 · 方向键移动',
+            sceneMove: '单板场景固定铺满背景',
+            windowResize: '拖动调整大小 · 方向键调整',
+            sceneResize: '单板场景随工作区自动铺满',
+          },
+          // Captured from the current Chrome desktop; heights retain the expanded size.
+          windows: {
+            scene: { x: 12, y: 12, width: 1310, height: 796, visible: true, collapsed: false, fill: true },
+            controls: { x: 12, y: 12, width: 238.5078125, height: 530.16796875, visible: true, collapsed: true },
+            status: { x: 440, y: 24, width: 360, height: 420, visible: false, collapsed: false },
+            overview: { x: 12, y: 68.359375, width: 220, height: 284.7734375, visible: false, collapsed: true },
+            input: { x: 12, y: 124.94921875, width: 390.96484375, height: 366.1796875, visible: false, collapsed: true },
+            output: { x: 1102, y: 766, width: 220, height: 609.89453125, visible: false, collapsed: true },
+            inspector: { x: 488.34375, y: 12, width: 367.87109375, height: 382.32421875, visible: false, collapsed: true },
+            events: { x: 322.31640625, y: 101.3984375, width: 288.9375, height: 314.66015625, visible: false, collapsed: true },
+            tasks: { x: 628.85546875, y: 100.75390625, width: 283.45703125, height: 296.984375, visible: false, collapsed: true },
+            history: { x: 434.1171875, y: 766, width: 416, height: 250, visible: false, collapsed: true },
+            playback: { x: 1010.8828125, y: 78.51953125, width: 311.1171875, height: 274.6171875, visible: false, collapsed: true },
+            models: { x: 333.6953125, y: 12, width: 594.01171875, height: 699.91796875, visible: false, collapsed: true },
+            script: { x: 399.80859375, y: 12, width: 476.640625, height: 550.52734375, visible: false, collapsed: true },
+            snapshot: { x: 275.24609375, y: 12, width: 646.0234375, height: 466.43359375, visible: false, collapsed: true },
+            render: { x: 340.19140625, y: 12, width: 513.74609375, height: 508.6015625, visible: false, collapsed: true },
+            observe: { x: 393.01953125, y: 12, width: 434.703125, height: 507.34765625, visible: false, collapsed: true },
+            image: { x: 307.4765625, y: 12, width: 667.21875, height: 509.65625, visible: false, collapsed: true },
+            appearance: { x: 988.234375, y: 12, width: 333.765625, height: 565.48046875, visible: true, collapsed: true },
+          },
+          order: ['status', 'controls', 'image', 'input', 'overview', 'output', 'inspector', 'events', 'tasks', 'history', 'playback', 'models', 'script', 'snapshot', 'render', 'observe', 'appearance', 'scene'],
+        },
+      },
+    },
+    theme: {
+      background: '#000000', accent: '#00ffff', hover: '#e5edf6', focus: '#ffffff',
+      border: '#ffffff', selectionBackground: '#595959', selectionForeground: '#ffffff',
+      rail: '#000000', foreground: '#ffffff',
+      glass: { enabled: true, blur: 14, limits: { min: 0, max: 40, step: 1 } },
+    },
+    split: { value: 0.7370554956896551, min: 0.20, max: 0.82, step: 0.02 },
+    rail: {
+      width: { value: 80, min: 80, max: 360, step: 16 },
+      menuRatio: { value: 0.35403621834957005, min: 0.18, max: 0.78, step: 0.02 },
+      geometry: { splitterSize: 12, itemMinWidth: 52, minWorkspaceWidth: 280 },
+      appearance: {
+        menu: {
+          background: '#000000', opacity: 1, radius: 18,
+          iconColor: '#e5edf6', iconSize: 30, iconOpacity: 1,
+          foreground: '#e5edf6', fontSize: 15, fontOpacity: 1,
+        },
+        dock: {
+          background: '#000000', opacity: 1, radius: 18,
+          iconColor: '#e5edf6', iconSize: 30, iconOpacity: 1,
+          foreground: '#e5edf6', fontSize: 15, fontOpacity: 1,
+        },
+        limits: {
+          opacity: { min: 0, max: 1, step: 0.01 },
+          radius: { min: 0, max: 32, step: 1 },
+          iconSize: { min: 14, max: 40, step: 1 },
+          iconOpacity: { min: 0, max: 1, step: 0.01 },
+          fontSize: { min: 10, max: 20, step: 0.1 },
+          fontOpacity: { min: 0, max: 1, step: 0.01 },
+        },
+      },
+    },
+    geometry: { padding: 12, titleHeight: 42, dragThreshold: 4, keyboardStep: 16, maxCanvasHeight: 6000, minWidth: 220, minHeight: 120, baseWidth: 460, defaultZone: 'tools' },
+    appearance: {
+      target: 'appearance',
+      panels: { 'network-edges': 'network-edge-settings', 'network-nodes': 'network-node-settings' },
+      background: '#172432', foreground: '#e5edf6', opacity: 0.84, radius: 14, fontScale: 1,
+      limits: {
+        opacity: { min: 0.15, max: 1, step: 0.01 },
+        radius: { min: 0, max: 32, step: 1 },
+        fontScale: { min: 0.75, max: 2, step: 0.05 },
+      },
+    },
+    windows: {
+      scene: {
+        x: 0, y: 0, width: 720, height: 720, visible: true, collapsed: false, fill: true, minWidth: 180,
+        appearance: { background: '#122630', foreground: '#ffffff', opacity: 1, radius: 0, fontScale: 1.1 },
+        appearanceLimits: { opacity: { min: 0, max: 1, step: 0.01 } },
+      },
+      controls: {
+        x: 24, y: 174, width: 380, height: 430, visible: false, collapsed: false, zone: 'scene',
+        appearance: { background: '#000000', foreground: '#ffffff', opacity: 0.15, radius: 18, fontScale: 1.1 },
+      },
+      status: { x: 24, y: 24, width: 360, height: 420, visible: false, collapsed: false },
+      overview: {
+        x: 12, y: 12, width: 416, height: 186, visible: false, collapsed: false,
+        appearance: { background: '#000000', opacity: 0.15, radius: 18 },
+      },
+      input: { x: 12, y: 12, width: 416, height: 360, visible: true, collapsed: false },
+      playback: { x: 24, y: 568, width: 340, height: 260, visible: true, collapsed: false, zone: 'scene' },
+      inspector: {
+        x: 12, y: 384, width: 416, height: 440, visible: true, collapsed: false,
+        appearance: { background: '#000000', foreground: '#ffffff', opacity: 0.15, radius: 18, fontScale: 1.1 },
+      },
+      events: { x: 12, y: 836, width: 416, height: 210, visible: true, collapsed: false },
+      tasks: { x: 12, y: 1058, width: 416, height: 176, visible: true, collapsed: false },
+      output: { x: 12, y: 1246, width: 416, height: 270, visible: false, collapsed: false },
+      history: { x: 12, y: 1528, width: 416, height: 250, visible: false, collapsed: false },
+      models: { x: 24, y: 24, width: 580, height: 640, visible: false, collapsed: false },
+      script: { x: 24, y: 24, width: 560, height: 550, visible: false, collapsed: false },
+      snapshot: { x: 24, y: 24, width: 560, height: 520, visible: false, collapsed: false },
+      render: { x: 24, y: 24, width: 500, height: 400, visible: false, collapsed: false },
+      observe: { x: 24, y: 24, width: 500, height: 500, visible: false, collapsed: false },
+      image: { x: 24, y: 24, width: 600, height: 580, visible: false, collapsed: false },
+      appearance: {
+        x: 24, y: 24, width: 380, height: 640, visible: false, collapsed: false,
+        appearance: { background: '#000000', foreground: '#ffffff', opacity: 0.15, radius: 18, fontScale: 1.1 },
+      },
+    },
+  },
+  rgb: {
     maxIoBits: 216,
-    defaultPro: "q=0/1",
-    format: "jk-logic-structure-V4.0.0",
-    defaultName: "未命名模型",
-  },
-  engine: {
-    historyLimit: 400,
-    initialStateless: 0,
-    queues: { "Xi.FIFO": { priority: 1 }, "Qi.FIFO": { priority: 5 } },
-  },
-  imageInput: {
-    defaultPreset: "b1.png",
-    selection: { x: 0, y: 0, width: 3, height: 3 },
-    encoding: "rgb",
-    arrangement: "pixel",
-    bitOrder: "lsb-first",
-    background: "white",
-    fields: {
-      size: { min: 1, step: 1 },
-      coordinate: { min: 0, step: 1 },
+    modelName: 'RGB_3X3',
+    inputBit: 0,
+    imageInput: {
+      defaultPreset: "b1.png",
+      selection: { x: 0, y: 0, width: 3, height: 3 },
+      encoding: "rgb",
+      arrangement: "pixel",
+      bitOrder: "lsb-first",
+      background: "white",
+      fields: {
+        size: { min: 1, step: 1 },
+        coordinate: { min: 0, step: 1 },
+      },
+      limits: {
+        fileBytes: 32 * 1024 * 1024,
+        imagePixels: 16000000,
+        outputBits: 65536,
+        previewEntries: 128,
+      },
+      view: {
+        scale: 1,
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        maxScale: 64,
+        pixelRatio: 2,
+      },
     },
-    limits: {
-      fileBytes: 32 * 1024 * 1024,
-      imagePixels: 16000000,
-      outputBits: 65536,
-      previewEntries: 128,
-    },
-    view: {
-      scale: 1,
-      x: 0,
-      y: 0,
-      width: 0,
-      height: 0,
-      maxScale: 64,
-      pixelRatio: 2,
-    },
-  },
-  outputBoard: {
-    version: 1,
-    enabled: false,
-    rows: 3,
-    cols: 3,
-    scale: 3,
-    limits: {
-      dimension: { min: 1, max: 32 },
-      scale: { min: 0.25, max: 8, step: 0.25 },
-      channelBits: { min: 1, max: 64 },
-      brightness: { min: 0, max: 255 },
-    },
-    batch: { width: 8, order: "lsb-first", mapping: "scale", gray: true },
-    channel: { value: 0, radix: 10 },
-    packed: {
-      widths: { r: 8, g: 8, b: 8 },
-      order: "lsb-first",
-      mapping: "scale",
+    outputBoard: {
+      version: 1,
+      enabled: false,
+      rows: 3,
+      cols: 3,
+      scale: 3,
+      limits: {
+        dimension: { min: 1, max: 32 },
+        scale: { min: 0.25, max: 8, step: 0.25 },
+        channelBits: { min: 1, max: 64 },
+        brightness: { min: 0, max: 255 },
+      },
+      batch: { width: 8, order: "lsb-first", mapping: "scale", gray: true },
+      channel: { value: 0, radix: 10 },
+      packed: {
+        widths: { r: 8, g: 8, b: 8 },
+        order: "lsb-first",
+        mapping: "scale",
+      },
     },
   },
-  playback: {
-    running: true,
-    speed: { value: 1, min: 0.25, max: 4, step: 0.25 },
-    skipAnimation: true,
-    skipBudgetMs: 4,
-    maxSkipSteps: 10000,
-    duration: 0.85,
-    maxVisuals: 400,
-  },
+  model: { version: '7.0.0', example: 'ASCII_DIGITS', snapshotName: 'ModelShow-session', runName: 'ModelShow-run' },
+  engine: { backend: 'javascript', maxUnits: 100000, frameUnits: 128, frameBudgetMs: 4, gpuBatch: 128 },
+  gpu: { workgroupSize: 64, label: 'ModelShow JKRD7 EX', maxBatch: 128 },
+  playback: { speed: { value: 1, min: 0.25, max: 4, step: 0.25 }, skip: true, duration: 0.85, maxVisuals: 400 },
   scene: {
+    styles: {
+      storage: { key: 'modelshow.jkm.network-styles.v1', version: 1 },
+      edges: {
+        defaultType: 'J',
+        // Defaults captured from the current Chrome connection-style settings.
+        types: {
+          J: { label: 'J 运算线', color: '#e898c0', opacity: 0.4, length: 1, visible: true },
+          K: { label: 'K 运算线', color: '#689ef3', opacity: 0.4, length: 1, visible: true },
+          trigger: { label: '触发通知线', color: '#ffffff', opacity: 0.1, length: 1, visible: true },
+          source: { label: '来源定义线', color: '#fa3e00', opacity: 1, length: 1, visible: true },
+          observe: { label: '输出观察线', color: '#79dfae', opacity: 0.4, length: 1, visible: true },
+        },
+        limits: {
+          opacity: { min: 0, max: 1, step: 0.01 },
+          length: { min: 0.25, max: 3, step: 0.05 },
+        },
+      },
+      nodes: {
+        defaultType: 'node',
+        types: {
+          input: { label: '输入入口', color: '#73aaff', size: 1, visible: true, labels: true },
+          node: { label: '普通 JKI', color: '#f1f6ff', size: 1, visible: true, labels: true },
+          observe: { label: '输出观察', color: '#79dfae', size: 1, visible: true, labels: true },
+        },
+        // Empty overrides inherit each node's existing input / JKI appearance.
+        computationTypes: {
+          ex: { label: 'ex计算节点', overrides: {}, marker: { visible: true, color: '#173145', size: 30 } },
+          q: { label: '无计算q节点', overrides: {} },
+        },
+        limits: { size: { min: 0.25, max: 4, step: 0.05 } },
+      },
+      layout: { iterations: 48, relaxation: 0.7 },
+    },
+    appearance: { backgroundEdge: '#08121f' },
+    outputBoard: { enabled: false, rows: 3, cols: 3, scale: 3, brightnessMax: 255 },
     layout: "5D",
+    nodeMarker: { text: 'x' },
     nodeLabelsHidden: false,
     blackBackground: false,
     renderer: {
@@ -100,12 +251,21 @@ export const APP_CONFIG = freezeTree({
       },
     },
   },
-  lists: {
-    queue: { rowHeight: 36, overscanBefore: 2, overscanCount: 5 },
-    history: { visibleEntries: 60 },
+  view: {
+    inspector: {
+      tree: { expandedDepth: 1 },
+      sections: { state: true, calculation: false, events: false, definition: false },
+    },
+    queues: {
+      rows: 200,
+      events: { records: { expanded: false } },
+    },
+    traceRows: 120, outputRows: 100,
+    board: { width: 256, height: 128, cellSize: 24, zero: '#263b4d', one: '#81e7bf' },
+    fileBytes: 32 * 1024 * 1024,
   },
-  signals: {
-    defaultValue: 0,
-    example: { X0: 1, X1: 0, X2: 1, X3: 0 },
-  },
+  input: { batch: ['G1.Q1', 'G1.Q2', 'G1.Q10'] },
+  observe: { watch: ['G1.Q24'], read: ['G1.Q11', 'G1.Q12', 'G1.Q13', 'G1.Q14', 'G1.Q25', 'G1.Q26', 'G1.Q27', 'G1.Q28'] },
+  pool: { endpoint: './api/model-pool', timeoutMs: 5000 },
+  image: { maxPixels: 64, threshold: 128, background: '#ffffff', preview: { width: 256, height: 160 }, limits: { decodedPixels: 16000000, pixels: { min: 1, max: 4096, step: 1 }, threshold: { min: 0, max: 255, step: 1 } } },
 });

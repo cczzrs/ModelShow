@@ -1,6 +1,6 @@
 import { APP_CONFIG } from '../../html/config.js';
 import * as THREE from 'three/webgpu';
-import {CHANNELS,displayConnections} from '../ui/output-display.js';
+import {CHANNELS,displayConnections} from './display-state.js';
 import {FloatingEdgeCurve} from './edge-curves.js';
 import {disposeGroup} from './resources.js';
 import {mergePendingRange} from './buffer-updates.js';
@@ -24,7 +24,7 @@ export class OutputBoard {
   const maxX=ys.length?Math.max(...ys.map(p=>p.x)):layout.bounds.max.x;
   const midY=ys.length?(Math.min(...ys.map(p=>p.y))+Math.max(...ys.map(p=>p.y)))/2:0;
   const z=ys.length?(Math.min(...ys.map(p=>p.z))+Math.max(...ys.map(p=>p.z)))/2:0;
-  const scale=config.scale??APP_CONFIG.outputBoard.scale,pitch=PITCH*scale;
+  const scale=config.scale??APP_CONFIG.scene.outputBoard.scale,pitch=PITCH*scale;
   const width=config.cols*pitch,height=config.rows*pitch,outerWidth=width+.04*scale,outerHeight=height+.04*scale;
   // The screen lies in YZ and faces +X. Viewed from its front, right is -Z.
   // Anchor its back to the output region so resizing never closes the 3-unit gap.

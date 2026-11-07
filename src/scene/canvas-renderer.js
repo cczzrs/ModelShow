@@ -97,10 +97,11 @@ export class CanvasRenderer {
     }
     const center = new THREE.Vector3().setFromMatrixPosition(mesh.matrixWorld), projected = this.project(center);
     const onScreen = corners.map(point => this.project(point)).filter(Boolean);
+    const minimumPixels = this.config.minNodePixels * (this.view.networkStyles ? mesh.scale.x : 1);
     if (minimum && projected && onScreen.length === 8
-      && Math.max(...onScreen.map(p => p.x)) - Math.min(...onScreen.map(p => p.x)) < this.config.minNodePixels
-      && Math.max(...onScreen.map(p => p.y)) - Math.min(...onScreen.map(p => p.y)) < this.config.minNodePixels) {
-      const half = this.config.minNodePixels / 2;
+      && Math.max(...onScreen.map(p => p.x)) - Math.min(...onScreen.map(p => p.x)) < minimumPixels
+      && Math.max(...onScreen.map(p => p.y)) - Math.min(...onScreen.map(p => p.y)) < minimumPixels) {
+      const half = minimumPixels / 2;
       this.queue([{ ...projected, x: projected.x - half, y: projected.y - half },
         { ...projected, x: projected.x + half, y: projected.y - half },
         { ...projected, x: projected.x + half, y: projected.y + half },
@@ -123,7 +124,7 @@ export class CanvasRenderer {
       this.line(previous, point, color, width, alpha); previous = point;
     }
   }
-  arrow(curve, t, color, scale = 1) {
+  arrow(curve, t, color, scale = 1, alpha = 1) {
     const point = this.project(curve.getPoint(t));
     if (!point) return;
     const tangent = curve.getTangent(t), base = curve.getPoint(t).addScaledVector(tangent, -this.config.nodeSize);
@@ -133,7 +134,7 @@ export class CanvasRenderer {
     if (length < 1e-6) return;
     const ux = dx / length, uy = dy / length, size = this.config.arrowPixels * scale;
     this.queue([point, { x: point.x - ux * size - uy * size / 2, y: point.y - uy * size + ux * size / 2, z: point.z },
-      { x: point.x - ux * size + uy * size / 2, y: point.y - uy * size - ux * size / 2, z: point.z }], { fill: color, close: true });
+      { x: point.x - ux * size + uy * size / 2, y: point.y - uy * size - ux * size / 2, z: point.z }], { fill: color, close: true, alpha });
   }
   label(label) {
     if (!label || label.visible === false || !label.text) return;
@@ -141,7 +142,8 @@ export class CanvasRenderer {
     const depth = -vector(label.position).applyMatrix4(this.camera.matrixWorldInverse).z;
     const worldHeight = label.fontSize * label.scale.y / 64;
     const height = worldHeight * this.camera.projectionMatrix.elements[5] * this.height / (this.camera.isPerspectiveCamera ? 2 * depth : 2);
-    const fontSize = THREE.MathUtils.clamp(height, this.config.minFontPixels, this.config.maxFontPixels);
+    const scale = this.view.appearance?.fontScale ?? 1;
+    const fontSize = THREE.MathUtils.clamp(height, this.config.minFontPixels * scale, this.config.maxFontPixels * scale);
     const color = this.color.copy(label.textColor).multiply(label.color).getStyle();
     this.labels.push({ point, text: label.text, fontSize, color, order: label.renderOrder ?? 4 });
   }
@@ -173,7 +175,7 @@ export class CanvasRenderer {
     // Tiles are single-sided +X faces, exactly like the actual board. A rear view
     // shows its opaque back, never mirrored RGB pixels shining through the frame.
     if (!front) return;
-    const scale = board.config.scale ?? APP_CONFIG.outputBoard.scale;
+    const scale = board.config.scale ?? APP_CONFIG.scene.outputBoard.scale;
     const rectangle = (p, halfY, halfZ) => [new THREE.Vector3(p.x, p.y - halfY, p.z - halfZ),
       new THREE.Vector3(p.x, p.y + halfY, p.z - halfZ), new THREE.Vector3(p.x, p.y + halfY, p.z + halfZ),
       new THREE.Vector3(p.x, p.y - halfY, p.z + halfZ)];
@@ -231,10 +233,12 @@ export class CanvasRenderer {
     }
     this.grid(this.view.grid);
     for (const [index, edge] of this.view.edges.entries()) {
+      if (edge.visible === false) continue;
       const active = !!edge.highlight?.visible;
       const color = this.style(edge.highlight?.material?.color ?? this.view.batches?.edgeColors[index] ?? this.config.edgeColors[edge.op]);
-      this.curve(edge.curve, color, active ? this.config.activeLineWidth : this.config.lineWidth, active ? 1 : .4, edge.endT);
-      this.arrow(edge.curve, edge.endT, color, edge.arrow.scale.x);
+      const opacity = edge.styleOpacity ?? .4;
+      this.curve(edge.curve, color, active ? this.config.activeLineWidth : this.config.lineWidth, active ? Math.min(1, opacity / .4) : opacity, edge.endT);
+      this.arrow(edge.curve, edge.endT, color, edge.arrow.scale.x, Math.min(1, opacity / .4));
     }
     for (const visual of this.view.visuals.values()) {
       const size = visual.mesh.geometry?.parameters;
@@ -244,11 +248,14 @@ export class CanvasRenderer {
     }
     this.board(this.view.outputBoard);
     for (const signal of this.view.signals) {
+      if (signal.edge.visible === false || signal.text.visible === false || signal.tip.visible === false) continue;
       const at = (this.view.signalProgress ?? 0) * signal.edge.endT;
-      this.arrow(signal.edge.curve, at, this.style(signal.tip.material.color));
+      this.arrow(signal.edge.curve, at, this.style(signal.tip.material.color), 1, signal.tip.material.opacity);
       const point = this.project(signal.text.position);
       if (point && signal.value !== undefined) this.labels.push({ point, text: String(signal.value),
-        fontSize: this.config.maxFontPixels, color: this.config.signalTextColor, order: signal.text.renderOrder });
+        fontSize: this.config.maxFontPixels * (this.view.appearance?.fontScale ?? 1),
+        color: this.style(this.view.labelColor?.(this.config.signalTextColor) ?? this.config.signalTextColor), order: signal.text.renderOrder,
+        alpha: signal.text.material.opacity });
     }
     // Far geometry is painted first; labels follow the GPU's depthTest:false behavior.
     this.commands.sort((a, b) => b.depth - a.depth);
@@ -264,9 +271,11 @@ export class CanvasRenderer {
     context.globalAlpha = 1; context.textAlign = 'center'; context.textBaseline = 'middle';
     this.labels.sort((a, b) => a.order - b.order || b.point.z - a.point.z);
     for (const label of this.labels) {
+      context.globalAlpha = label.alpha ?? 1;
       context.fillStyle = label.color; context.font = `500 ${label.fontSize}px ${this.config.fontFamily}`;
       context.fillText(label.text, label.point.x, label.point.y);
     }
+    context.globalAlpha = 1;
   }
   dispose() { this.disposed = true; this.commands.length = this.labels.length = 0; this.context = null; this.view = null; }
 }

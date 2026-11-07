@@ -75,7 +75,7 @@ function inside(root, target) {
 /** Local development HTTP adapter. The hosted Site runs sites-worker.js. */
 export function createModelPoolServer(options = {}) {
   const distDir = path.resolve(options.distDir ?? path.join(projectRoot, 'dist/client'));
-  const storage = options.storage ?? createLocalModelPoolStore(path.join(projectRoot, 'html/server/.data/model-pool.json'), path.join(projectRoot, 'html/example.json'));
+  const storage = options.storage ?? createLocalModelPoolStore(path.join(projectRoot, 'html/server/.data/model-pool-v7.json'), path.join(projectRoot, 'html/example.json'));
   const token = options.token ?? process.env.MODEL_POOL_TOKEN ?? '';
   const originOption = options.allowedOrigins ?? process.env.MODEL_POOL_ALLOWED_ORIGINS ?? '';
   const allowedOrigins = new Set((Array.isArray(originOption) ? originOption : originOption.split(',')).map(origin => origin.trim()).filter(Boolean));

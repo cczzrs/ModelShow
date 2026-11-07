@@ -1,6 +1,6 @@
 /** Deterministic layouts in world units. This module never reads or mutates runtime q. */
 import { APP_CONFIG } from '../../html/config.js';
-import { compareNodes } from '../jk/node-id.js';
+import { compareDisplayNodes as compareNodes } from './model-view.js';
 export const LAYOUT_MODES = ['auto', '1D', '2D', '3D', '4D', '5D'];
 export const DEFAULT_LAYOUT_MODE = APP_CONFIG.scene.layout;
 const EPS = 1e-9;
@@ -45,7 +45,7 @@ export function layoutEdges(model) {
   for(const n of model.nodes)if(!byId.has(n.id))byId.set(n.id,n.key);
   const edges=[];
   for(const n of model.nodes)for(const t of n.tokens)if(t.source){
-    const source=t.source.startsWith('X')?t.source:byId.get(t.source);
+    const source=byId.get(t.source);
     if(source)edges.push({source,target:n.key}); // Repeated J/K tokens are real separate drawn edges.
   }
   for(const o of model.outputs)if(byId.has(o.source))edges.push({source:byId.get(o.source),target:o.id});
@@ -103,7 +103,7 @@ function topological(model,nodes,edges){
 /** Pin boundary nodes; optimize each free node's own referenced-source distances. */
 function five(model,nodes,edges) {
   const base=topological(model,nodes,edges);
-  const inputNodes=nodes.filter(n=>n.tokens.some(t=>t.source?.startsWith('X')));
+  const inputNodes=nodes.filter(n=>n.isInput);
   const inputSet=new Set(inputNodes.map(n=>n.key));
   const outputSources=new Set(model.outputs.map(o=>o.source));
   const dualKeys=nodes.filter(n=>inputSet.has(n.key)&&outputSources.has(n.id)).map(n=>n.key);

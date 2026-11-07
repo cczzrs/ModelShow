@@ -1,78 +1,65 @@
-# ModelShow V3.0.0
-![alt text](docs/images/ModelShow_V3.png)
+# ModelShow · JKRD7
 
-规则与设计统一以 [JK 项目的 JKRD V4.0.0](../JK/docs/JKRD.md) 为准，依赖入口见 [JK_SOURCE.json](docs/JK_SOURCE.json)。本项目只接受 V4.0.0 完整快照，不兼容或自动迁移旧版。具体实现与恢复边界见 [模型格式与执行](docs/model-format.md)，历史报告保留原日期和证明范围。
+ModelShow 是 JKRD7（7.0.0）模型的执行与网络展示工具。唯一规则来源为 [JK 中央项目的 JKRD7](../JK/JKRD7.md)，依赖入口见 [JK_SOURCE.json](docs/JK_SOURCE.json)。模型定义只接受新版 JKM，运行脚本、现场快照和 RGB 界面配置分别保存；不兼容、不迁移旧版本。
 
-ModelShow 是自定义 JK 节点网络的执行与 3D 展示工具。支持 FIFO 执行追踪、节点详情、六种布局、图片像素输入、RGB 输出画板和共享模型池。前端使用原生 HTML/CSS、JavaScript ES modules、Three.js WebGPU 与 Vite。
+计算使用 JavaScript，也可选择 WebGPU 计算 EX。WebGPU 按 JKRD7 §7.5 提取可并行批，结果仍按规定的串行顺序提交；事务、通知和 FIFO 的语义不随计算平台改变。不使用 CUDA。页面与 3D 展示保留原来的 JK OBSERVATORY 样式、立方体节点、曲线和布局。网络场景使用 Three.js WebGPU；场景初始化失败时明确切换到 Canvas 2D。
+
+顶栏 `header-center` 底部提供 **RGB / JKM** 标签，默认打开 JKM。JKM 保留当前模型、脚本和快照界面；RGB 恢复完整的原输入数据提取、输出渲染和模型管理布局。两个工作区有独立模型、运行状态和显示配置，切换时在完整处理单元结束后暂停当前工作区，返回时保留现场。
 
 ## 本地运行
 
-需要 Node.js 22.12+、pnpm，以及支持 WebGPU 的浏览器。浏览器无法初始化WebGPU时显示提示，不切换到WebGL。
+需要 Node.js 22.12+ 与项目依赖。安装后启动开发服务：
 
 ```sh
 pnpm install
 ./tools/dev.sh
 ```
 
-默认打开终端输出的 `http://127.0.0.1:5173/`。需要共享模型池时，在另一终端运行 `./tools/dev.sh api`；未连接后端仍可进行本页导入、模型切换和下载。
+在外部 Chrome 打开终端给出的本地地址，默认是 `http://127.0.0.1:5173/`。默认计算平台为 JavaScript；选择 WebGPU 后界面会报告其是否可用。
+
+共享模型池是可选服务，在另一终端运行：
+
+```sh
+./tools/dev.sh api
+```
+
+构建与生产前端预览：
 
 ```sh
 ./tools/dev.sh build
 ./tools/dev.sh preview
 ```
 
-构建后也可运行 `./tools/dev.sh serve`，在本地提供前端及持久模型池。命令区别和文件位置见[开发维护](docs/development.md)，线上Worker与R2说明见[模型池与托管](docs/hosting.md)。本地命令不公开发布网站。
+`./tools/dev.sh serve` 提供已构建的前端和本地持久模型池。以上命令均不发布线上网站，详见[开发维护](docs/development.md)与[共享模型池](docs/hosting.md)。
 
-## 使用入口
+## 功能
 
-- **模型管理**：导入、切换、编辑和下载；无效JSON 保留当前有效模型。共享临时模型公开管理，永久模型入池/删除需管理员口令。
-- **发送与播放**：输入Xi JSON后发送，支持暂停、单步、倍速和跳过动画；查看完整虚拟队列、最近60条历史及节点求值步骤。
-- **图片输入**：基础图片或本地PNG/JPEG/WebP提取像素并填入Xi，填入后需单独发送。
-- **输出渲染**：将Yi组合为RGB灯通道；灯编辑为草稿，点击“应用到此灯”保存，画板配置以独立 JSON 导入/导出，只包含已应用配置。
+- 加载中央示例，导入、校验、编辑和下载 JKRD7 模型；无效导入保留当前有效模型。
+- 通过输入入口发出通知，支持重叠输入批、单步、播放、暂停和恢复模型初值。
+- 查看嵌套 JKS、JKI 的 q、trigger、sources、publish、all 到达记录，以及事件 FIFO、任务 FIFO 与登记轮。
+- 按 `observe.watch` 订阅通知，按 `observe.read` 读取位；查看数值、字符与输出位画板。
+- 执行独立运行脚本，保存和恢复独立现场快照，下载标准 JSONL 执行记录。
+- JKM 可将图片灰度阈值结果映射到两个独热入口，生成逐像素运行脚本。
+- RGB 保留原图片选区、RGB／灰度、像素／通道排列、字节位序和预设图片；提取完整 bit 数组后按显式绑定发送通知。
+- RGB 输出支持通道与打包位编辑、批量绑定和原 3D 灯阵；绑定及灯阵另存 `.rgb.json`，不写入 JKM。
+- 使用共享模型池；临时模型公开管理，永久模型操作继续要求管理员口令。
 
-默认图片选区3×3；新画板3×3、关闭、缩放3倍；布局5D、播放1倍且跳过动画。画板文件必须显式提供 scale。
+RGB 默认加载 `RGB_3X3`：216 位由 JKRD7 的 M_REG 结构组合保存，完成节点等待整帧后通知输出。3×3 灯阵已按 RGB 位绑定，沿用原默认关闭状态；在“输出渲染”中勾选“显示画板”即可显示。
 
-## 项目结构
+当前支持单 queue。多个 queue 的调度、多 JKS 重复前置登记、工厂及生命周期行为仍遵守中央待定义边界，不根据旧版实现推断。
 
-```text
-html/                   页面、配置、资源与服务入口
-  index.html main.js config.js style.css
-  example.json favicon.ico b1.png b2.png
-  server/               本地服务、Sites Worker与R2
-src/                    功能模块
-  jk/                   执行器、校验、快照、模型池数据
-  ui/                   输入、输出、模型管理、播放控制
-  scene/                3D 场景、布局、相机、绘制
-tools/                  开发与构建工具
-  dev.sh vite.config.js build.mjs
-tests/                  run.mjs、分组测试、fixtures、helpers和bench
-docs/                   JK_SOURCE.json、使用、契约、维护与验证记录
-```
+## 维护入口
 
-| 要修改什么 | 入口 |
+| 内容 | 入口 |
 | --- | --- |
-| 界面结构、固定选项、变长行模板 | `html/index.html` |
-| 样式、颜色、尺寸与窄屏适配 | `html/style.css` |
-| 默认值与限制 | `html/config.js` 的只读 `APP_CONFIG` |
-| 交互与数据更新 | `html/main.js` 及 `src/` 对应功能目录 |
-| 模型执行语义、校验与快照 | `src/jk/` |
-| 输入、输出、模型管理与播放控制 | `src/ui/` |
-| 3D 场景、布局与画板绘制 | `src/scene/` |
-| 模型池服务和R2协议 | `html/server/` 与 `src/jk/model-pool.js` |
+| 模型、脚本、快照与执行边界 | [模型格式与执行](docs/model-format.md) |
+| 页面操作 | [使用说明](docs/usage.md) |
+| 场景和计算平台的区别 | [场景与渲染](docs/rendering.md) |
+| 目录、配置和定向测试 | [开发维护](docs/development.md) |
+| 本地池、Sites Worker 和 R2 | [共享模型池与托管](docs/hosting.md) |
 
-JS只克隆HTML模板、填值和绑定事件；选中/异常通过class，固定外观归CSS。具体动态变量、控制器生命周期、配置职责见[开发维护](docs/development.md#界面维护边界)。
+验证截图、状态快照、过程报告、历史资料、备份和发布留档均放在系统临时目录，不作为项目内的永久文档入口。正式测试源码保留在 `tests/`，产品文档保留在 `docs/`；具体管理方式见[开发维护](docs/development.md#留档管理)。留档仍须保留原日期、协议版本、实际覆盖范围及未验证事项，不能据此推断全流程回归或硬件验证已经通过。
 
-## 文档与验证
+页面结构与模板写在 `html/index.html`，样式写在 `html/style.css`，产品默认值集中在 `html/config.js` 的只读 `APP_CONFIG` 树。JavaScript 绑定交互、填充模板及绘制 Canvas/GPU 图形，不拼接 HTML 或生成 CSS。
 
-- [模型格式与执行语义](docs/model-format.md)：V4 校验、双队列任务、状态、输出事件和快照恢复。
-- [操作说明](docs/usage.md)：播放、图片输入和画板配置格式。
-- [场景与布局](docs/rendering.md)：1D～5D/自动、相机、全屏与渲染边界。
-- [逐文件清理记录](docs/project-file-audit.md)：每个项目文件的保留、移动或移出理由。
-- [开发维护](docs/development.md)：目录职责、构建预览、定向测试与性能入口。
-- [模型池与托管](docs/hosting.md)：共享管理、离线恢复、HTTP版本和Sites R2存储。
-- [V4 对齐记录](docs/validation/jkrd-v4-2026-10-12.md)：2026-10-12 的 V4 差异、定向测试与 Chrome 检查，不包含后续目录调整的验证。
-- [历史 JK 空间对齐记录](docs/jk-space-alignment-2026-10-02.md)：2026-10-02 的改动、199 项相关功能测试及 Chrome 检查范围。
-
-按改动范围运行相关测试，前端验收使用外部 **Chrome**。不默认跑全流程回归，不自动提交Git或公开发布。历史验证记录保留执行日期与证明范围，不代表当前工作区全量验收。
-
-## 口令在 html/server/.env.sites 里的 MODEL_POOL_TOKEN 内容。
+测试只运行本次改动相关功能；前端使用外部 Chrome 验收。Git 提交仍须先请求批准，说明理由并提供提交说明建议。本次本地更新不包含 Git 提交或线上发布。

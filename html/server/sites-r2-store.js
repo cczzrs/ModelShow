@@ -1,7 +1,7 @@
 import { parseModelPool } from '../../src/jk/model-pool.js';
 import { failure } from './model-pool-service.js';
 
-export const MODEL_POOL_KEY = 'model-pool.json';
+export const MODEL_POOL_KEY = 'model-pool-v7.json';
 const httpMetadata = { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' };
 const throttled = error => error?.status === 429 || error?.code === 10058 || /\b10058\b|too many requests/i.test(error?.message ?? '');
 
@@ -23,7 +23,7 @@ export function createSitesR2Store(bucket, seed) {
       try {
         let object = await bucket.get(MODEL_POOL_KEY);
         if (object === null) {
-          // Migrate the bundled pool only when the object does not yet exist.
+          // Initialize the JKRD7 pool only when the object does not yet exist.
           // Concurrent first visits must never replace an existing pool.
           if (seed === undefined) throw failure(503, '模型池文件尚未初始化。');
           const source = `${JSON.stringify(parseModelPool(seed), null, 2)}\n`;

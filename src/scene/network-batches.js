@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import {instancedBufferAttribute} from 'three/tsl';
 import {disposeGroup} from './resources.js';
 import {mergePendingRange} from './buffer-updates.js';
 
@@ -9,6 +10,7 @@ export class NetworkBatches {
     this.nodeCount=nodeCount;this.edgeCount=edgeCount;this.segments=segments;this.group=new THREE.Group();
     this.dirty=new Map();this.active=new Uint8Array(edgeCount);this.activeCount=0;
     this.edgeColors=new Float64Array(edgeCount).fill(-1);this.arrowMatrices=new Float32Array(edgeCount*16);
+    this.edgeOpacities=new Float64Array(edgeCount).fill(NaN);this.edgeVisibility=new Uint8Array(edgeCount).fill(1);
     this.point=new THREE.Vector3();this.previous=new THREE.Vector3();this.direction=new THREE.Vector3();
     this.up=new THREE.Vector3(0,1,0);this.rotation=new THREE.Quaternion();this.scale=new THREE.Vector3(1,1,1);
     this.matrix=new THREE.Matrix4();this.color=new THREE.Color();
@@ -49,7 +51,7 @@ export class NetworkBatches {
   /** Copy a CPU mesh's transform and color; repeated unchanged copies cause no upload. */
   setNode(index,proxy){
     this.check(index,this.nodeCount);proxy.updateMatrix();
-    this.write(this.nodes.instanceMatrix,index*16,proxy.matrix.elements);
+    this.write(this.nodes.instanceMatrix,index*16,proxy.visible===false?this.matrix.makeScale(0,0,0).elements:proxy.matrix.elements);
     const color=proxy.material.color;
     this.write(this.nodes.instanceColor,index*3,[color.r,color.g,color.b]);
   }
@@ -74,22 +76,41 @@ export class NetworkBatches {
   updateArrow(index){
     this.matrix.fromArray(this.arrowMatrices,index*16);
     const selected=!!this.active[index];
-    if(selected)this.matrix.scale(this.point.setScalar(1.35));
+    if(!this.edgeVisibility[index])this.matrix.makeScale(0,0,0);
+    else if(selected)this.matrix.scale(this.point.setScalar(1.35));
     this.write((selected?this.selectedArrows:this.arrows).instanceMatrix,index*16,this.matrix.elements);
     this.matrix.makeScale(0,0,0);
     this.write((selected?this.arrows:this.selectedArrows).instanceMatrix,index*16,this.matrix.elements);
   }
   /** Lines retain true per-edge alpha; selected arrowheads have separate opaque instances. */
-  setEdgeStyle(index,color,selected=false){
-    this.check(index,this.edgeCount);const active=selected?1:0;
-    if(this.edgeColors[index]===color&&this.active[index]===active)return;
-    if(this.active[index]!==active){this.activeCount+=active?1:-1;this.active[index]=active;this.updateArrow(index);}
+  setEdgeStyle(index,color,selected=false,style=null){
+    this.check(index,this.edgeCount);
+    const opacity=style?.opacity??.4,visible=style?.visible!==false&&opacity>0?1:0,active=selected&&visible?1:0;
+    if(this.edgeColors[index]===color&&this.active[index]===active&&this.edgeOpacities[index]===opacity&&this.edgeVisibility[index]===visible)return;
+    if(this.active[index]!==active){this.activeCount+=active?1:-1;this.active[index]=active;}
+    this.edgeVisibility[index]=visible;this.edgeOpacities[index]=opacity;this.updateArrow(index);
     this.edgeColors[index]=color;this.color.setHex(color);
     const {r,g,b}=this.color,attribute=this.lines.geometry.attributes.color,start=index*this.segments*8;
-    for(let offset=start;offset<start+this.segments*8;offset+=4){attribute.array[offset]=r;attribute.array[offset+1]=g;attribute.array[offset+2]=b;attribute.array[offset+3]=active?1:.4;}
+    const alpha=visible?(active?Math.min(1,opacity/.4):opacity):0;
+    for(let offset=start;offset<start+this.segments*8;offset+=4){attribute.array[offset]=r;attribute.array[offset+1]=g;attribute.array[offset+2]=b;attribute.array[offset+3]=alpha;}
     this.mark(attribute,start,this.segments*8);
     this.write(this.arrows.instanceColor,index*3,[r,g,b]);this.write(this.selectedArrows.instanceColor,index*3,[r,g,b]);
+    // RGB retains its original materials. Per-instance arrow alpha is enabled
+    // only when an explicitly styled network needs non-default transparency.
+    if(style&&opacity!==.4&&!this.arrowOpacity)this.enableArrowOpacity();
+    if(this.arrowOpacity){
+      this.write(this.arrowOpacity,index,[Math.min(1,opacity*2)]);
+      this.write(this.selectedArrowOpacity,index,[Math.min(1,opacity/.4)]);
+    }
     this.arrows.visible=this.activeCount<this.edgeCount;this.selectedArrows.visible=this.activeCount>0;
+  }
+  enableArrowOpacity(){
+    for(const [mesh,key,factor]of [[this.arrows,'arrowOpacity',2],[this.selectedArrows,'selectedArrowOpacity',2.5]]){
+      const values=Float32Array.from(this.edgeOpacities,opacity=>Math.min(1,(Number.isFinite(opacity)?opacity:.4)*factor));
+      const attribute=new THREE.InstancedBufferAttribute(values,1).setUsage(THREE.DynamicDrawUsage);
+      const material=new THREE.MeshBasicNodeMaterial({transparent:true});material.opacityNode=instancedBufferAttribute(attribute);
+      mesh.material.dispose();mesh.material=material;this[key]=attribute;
+    }
   }
   /** Call once after a group of edits, before rendering. Bounds are recomputed once per batch. */
   commit(){

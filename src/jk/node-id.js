@@ -1,21 +1,27 @@
-/** V4 identity is a fixed numeric Q ID. Display never changes references. */
-export function parseJKId(value) {
-  const match = typeof value === 'string' && /^Q(0|[1-9]\d*)$/.exec(value);
-  if (!match || match[0] !== value) throw new Error('JK 节点 ID 必须为固定 Q 编号，不接受标签或前导零');
-  return {id: value, number: match[1]};
+// JKRD7 §7.3: compare paths by segments, JKI before JKS, numeric IDs.
+export const JKI_ID = /^Q[1-9][0-9]*$/;
+export const JKS_ID = /^G[1-9][0-9]*$/;
+export const JKI_PATH = /^(?:G[1-9][0-9]*\.)+Q[1-9][0-9]*$/;
+export const JKS_PATH = /^G[1-9][0-9]*(?:\.G[1-9][0-9]*)*$/;
+
+export function comparePaths(a, b) {
+  const left = a.split('.');
+  const right = b.split('.');
+  for (let i = 0; i < Math.min(left.length, right.length); i += 1) {
+    if (left[i] === right[i]) continue;
+    if (left[i][0] !== right[i][0]) return left[i][0] === 'Q' ? -1 : 1;
+    // IDs have no leading zeroes. Comparing digit lengths avoids rounding large IDs.
+    const x = left[i].slice(1), y = right[i].slice(1);
+    if (x.length !== y.length) return x.length - y.length;
+    return x < y ? -1 : 1;
+  }
+  return left.length - right.length;
 }
-export function order(a, b) {
-  const number = value => /^[XQY](0|[1-9]\d*)$/.exec(value)?.[1];
-  const left = number(a), right = number(b);
-  if (left === undefined || right === undefined) throw new Error('无法排序无效节点 ID');
-  const x = BigInt(left), y = BigInt(right);
-  return x < y ? -1 : x > y ? 1 : 0;
+
+export function parentPath(path) {
+  return path.slice(0, path.lastIndexOf('.'));
 }
-export function compareNodes(a, b) {
-  try { return order(a.id, b.id) || a.key.localeCompare(b.key); }
-  catch { return a.key.localeCompare(b.key); }
-}
-export function displayNodeId(model, id) {
-  const nodes = model?.byId?.get(id);
-  return nodes?.length === 1 ? nodes[0].displayName : id;
+
+export function isDescendant(path, group) {
+  return path.startsWith(`${group}.`);
 }
