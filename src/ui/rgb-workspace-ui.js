@@ -10,6 +10,7 @@ import { RGBOutputDisplayUI, lampDetails } from './rgb-output-ui.js';
 import { defaultDisplay, batchDisplay } from './rgb-output-display.js';
 import { RGBModelManager } from './rgb-model-manager.js';
 import { captureRGBConfig, validateRGBConfig } from './rgb-workspace-config.js';
+import { initializeConfiguredBackend, syncSceneControlButtons } from './workspace-settings.js';
 
 const pretty = value => JSON.stringify(value, null, 2);
 const $ = id => document.getElementById(`rgb-${id}`);
@@ -27,14 +28,20 @@ function drawingDisplay(config) {
   visit(next); return next;
 }
 
+export function initialRGBDisplay(display, outputs, assignment = APP_CONFIG.rgb.outputBoard.initialAssignment) {
+  if (!assignment.enabled || !outputs[assignment.startIndex]) return display;
+  return batchDisplay(display, { start: outputs[assignment.startIndex].id, gray: assignment.gray }, outputs);
+}
+
 /** The original RGB workspace, using only the current JKRD7 executor. */
 export class RGBWorkspaceUI {
   constructor() {
     this.panel = $('panel'); this.active = true; this.running = false; this.version = 0;
+    this.disposed = false;
     this.timer = null; this.inFlight = null; this.generation = 0; this.last = new Map();
     this.presentations = new Map(); this.configFileVersion = 0;
     this.outputCells = new Map(); this.pickerCells = new Map(); this.listeners = [];
-    this.gpu = new GPUCompute((text) => { $('compute-message').textContent = text; });
+    this.gpu = new GPUCompute((text) => { if (!this.disposed) $('compute-message').textContent = text; });
     this.view = new NetworkView({
       container: $('viewport'), preserveObservationSelection: true,
       onSelect: path => this.select(path),
@@ -64,7 +71,10 @@ export class RGBWorkspaceUI {
     const initial = createRGBWorkspace();
     this.install(initial.model, initial.bindings, true);
     this.manager.init(initial.model, initial.bindings);
-    this.ready = this.view.ready;
+    this.backendReady = initializeConfiguredBackend(this.gpu, APP_CONFIG.engine.backend, () => this.disposed);
+    this.ready = Promise.all([this.view.ready, this.backendReady]).then(() => {
+      if (!this.disposed) this.render();
+    });
   }
 
   listen(element, type, callback) {
@@ -121,12 +131,20 @@ export class RGBWorkspaceUI {
     for (const key of ['min', 'max', 'step']) $('speed')[key] = APP_CONFIG.playback.speed[key];
     $('speed').value = APP_CONFIG.playback.speed.value; $('skip').checked = APP_CONFIG.playback.skip;
     $('backend').value = APP_CONFIG.engine.backend;
+    syncSceneControlButtons({ labels: $('node-labels'), background: $('black-background') }, APP_CONFIG.scene);
+    for (const [id, key] of [['metadata-details', 'metadata'], ['inspector-evaluation', 'evaluation'], ['bindings-details', 'bindings']]) {
+      $(id).open = APP_CONFIG.view.disclosures.rgb[key];
+    }
     this.listen($('speed'), 'input', () => this.playbackSettings());
     this.listen($('skip'), 'change', () => this.playbackSettings());
     this.listen($('backend'), 'change', () => this.boundary(async () => {
-      if ($('backend').value === 'webgpu') await this.gpu.init();
+      if (this.disposed) return;
+      if ($('backend').value === 'webgpu') {
+        this.backendReady = initializeConfiguredBackend(this.gpu, $('backend').value, () => this.disposed);
+        await this.backendReady;
+      }
       else $('compute-message').textContent = 'JavaScript 串行计算';
-      this.render();
+      if (!this.disposed) this.render();
     }).catch(error => this.message(error.message, true)));
     this.action('send', () => this.boundary(() => {
       const paths = bitBatchToPaths(JSON.parse($('input-json').value), this.bindings, this.model);
@@ -189,7 +207,7 @@ export class RGBWorkspaceUI {
     this.last.clear(); this.selected = null;
     this.display = structuredClone(this.presentations.get(this.presentationKey) ?? defaultDisplay());
     const outputs = checked.observe.read.map(path => ({ id: path, source: path }));
-    if (initial) this.display = batchDisplay(this.display, { start: outputs[0].id, gray: false }, outputs);
+    if (initial) this.display = initialRGBDisplay(this.display, outputs);
     this.presentations.set(this.presentationKey, structuredClone(this.display));
     this.imageUI.setModel(checked.inputs.map((_, index) => `b${index}`), this.version);
     this.outputUI.load(this.display, outputs);
@@ -234,6 +252,8 @@ export class RGBWorkspaceUI {
   }
   async process(single = false) {
     let entry;
+    if ($('backend').value === 'webgpu' && this.backendReady) await this.backendReady;
+    if (this.disposed) return;
     if ($('backend').value !== 'webgpu') entry = this.engine.step();
     else entry = single || !$('skip').checked ? await this.engine.stepAsync(input => this.gpu.compute(input))
       : await this.engine.runBatchAsync(inputs => this.gpu.computeBatch(inputs), { maxTasks: APP_CONFIG.engine.gpuBatch, maxEventUnits: APP_CONFIG.engine.frameUnits });
@@ -285,7 +305,7 @@ export class RGBWorkspaceUI {
     });
     $('output-status').textContent = `${engine.outputs.length} 次输出 · watch 通知到达时读取`;
     $('queue-rows').replaceChildren();
-    const items = [...engine.events, ...engine.tasks].slice(0, APP_CONFIG.view.queueRows);
+    const items = [...engine.events, ...engine.tasks].slice(0, APP_CONFIG.view.queues.rows);
     for (const item of items) {
       const row = template('queue-row-template'), path = item.source || item.node || item.tx;
       row.querySelector('em').textContent = item.source ? 'EV' : item.tx ? 'TX' : 'EX';
@@ -347,6 +367,7 @@ export class RGBWorkspaceUI {
     }
   }
   dispose() {
+    this.disposed = true;
     this.configFileVersion++; this.pause(); this.imageUI.dispose(); this.outputUI.dispose(); this.manager.dispose(); this.gpu.dispose(); this.view.dispose();
     this.listeners.forEach(remove => remove()); this.listeners = [];
   }

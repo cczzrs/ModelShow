@@ -270,7 +270,7 @@
             </div>
             <p id="model-summary" class="muted model-validation">JKRD7 · 正在加载</p>
             <div id="model-errors" class="errors" hidden></div>
-            <details>
+            <details id="jkm-metadata-details">
               <summary>模型元数据</summary>
               <p class="muted">JKS <b id="stat-groups">0</b> · 事件 <b id="stat-events">0</b> · 任务 <b id="stat-tasks">0</b></p>
               <pre id="metadata"></pre>
@@ -746,7 +746,7 @@
     <label class="network-style-check"><input id="network-node-labels" type="checkbox" />显示名称和次数</label>
     <label id="network-node-marker-visible-field" class="network-style-check" hidden><input id="network-node-marker-visible" type="checkbox" />显示“x”</label>
     <label id="network-node-marker-color-field" for="network-node-marker-color" hidden>“x”颜色<input id="network-node-marker-color" type="color" /></label>
-    <p class="cosmic-appearance-hint">ex计算节点的 sources.ex 非空，其余 JKI 属于无计算q节点，包含输入入口。两类默认继承基础样式，仅覆盖修改的属性；用途标签优先。多个标签取模型顺序中首个已设置的标签；隐藏节点时一并隐藏相连的线。名称仍受“隐藏名称和次数”控制。</p>
+    <p class="cosmic-appearance-hint">ex计算节点的 sources.ex 非空，其余 JKI 属于无计算q节点，包含输入入口。两类默认继承基础样式，仅覆盖修改的属性；用途标签优先。x 的显示和颜色独立设置。多个标签取模型顺序中首个已设置的标签；隐藏节点时一并隐藏相连的线。名称仍受“隐藏名称和次数”控制。</p>
     <button id="network-node-reset" class="button" type="button">恢复此类节点</button>
   </div>
 </fieldset>
@@ -877,7 +877,7 @@
             </div>
             <p id="rgb-model-validation" class="muted model-validation"></p>
             <div id="rgb-model-errors" class="errors" hidden></div>
-            <details>
+            <details id="rgb-metadata-details">
               <summary>模型元数据</summary>
               <pre id="rgb-metadata"></pre>
             </details>
@@ -1112,7 +1112,7 @@
                       <b id="rgb-inspector-count"></b>
                     </div>
                   </div>
-                  <details id="rgb-inspector-evaluation" open hidden>
+                  <details id="rgb-inspector-evaluation" hidden>
                     <summary id="rgb-inspector-evaluation-title"></summary>
                     <pre id="rgb-inspector-reads" class="operation-list"></pre>
                     <div id="rgb-inspector-operations" class="operation-list"></div>
@@ -1301,7 +1301,7 @@
         spellcheck="false"
         placeholder='{"jkm":"RGB_MODEL","version":"7.0.0","queues":["work"],"roots":[]}'
       ></textarea>
-      <details class="rgb-bindings">
+      <details id="rgb-bindings-details" class="rgb-bindings">
         <summary>输入与输出绑定</summary>
         <p class="muted">输入位对应置 0／置 1 入口；输出由 watch／read 观察。绑定独立于 JKM 定义。</p>
         <label for="rgb-bindings-json">绑定 JSON</label>

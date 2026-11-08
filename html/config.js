@@ -1,4 +1,12 @@
-/** All product defaults live here; JKM definitions remain canonical data. */
+/**
+ * 产品默认配置。只读；运行状态、浏览器缓存和 JKM 定义不写入此树。
+ * workspace / desktop：工作区、窗口布局和外观（通用值 + 各窗口覆盖）。
+ * rgb：RGB 图片输入、输出灯阵和首次分配策略。
+ * model / image：JKM 加载预设（路径、输入、观察）和图片转输入。
+ * engine / gpu / playback：计算平台、预算和播放。
+ * scene：相机、鼠标操作、网络样式和渲染；view：面板显示与折叠。
+ * pool：共享模型服务。已有浏览器设置优先；恢复操作重新读取本树。
+ */
 function freezeTree(value) {
   Object.values(value).forEach(child => { if (child && typeof child === 'object') freezeTree(child); });
   return Object.freeze(value);
@@ -134,12 +142,13 @@ export const APP_CONFIG = freezeTree({
     },
   },
   rgb: {
-    maxIoBits: 216,
     modelName: 'RGB_3X3',
     inputBit: 0,
     imageInput: {
       defaultPreset: "b1.png",
       selection: { x: 0, y: 0, width: 3, height: 3 },
+      // selection: configured / center / retain；view: fit / configured。
+      import: { selection: 'configured', view: 'fit' },
       encoding: "rgb",
       arrangement: "pixel",
       bitOrder: "lsb-first",
@@ -162,7 +171,11 @@ export const APP_CONFIG = freezeTree({
         height: 0,
         maxScale: 64,
         pixelRatio: 2,
+        fitPadding: 32,
+        minScaleDivisor: 16,
       },
+      interaction: { wheel: { linePixels: 16, sensitivity: 0.0015 } },
+      preview: { padding: 12 },
     },
     outputBoard: {
       version: 1,
@@ -170,6 +183,9 @@ export const APP_CONFIG = freezeTree({
       rows: 3,
       cols: 3,
       scale: 3,
+      initialAssignment: { enabled: true, gray: false, startIndex: 0 },
+      pixel: { mode: 'channels' },
+      editor: { selectedIndex: 0 },
       limits: {
         dimension: { min: 1, max: 32 },
         scale: { min: 0.25, max: 8, step: 0.25 },
@@ -177,19 +193,50 @@ export const APP_CONFIG = freezeTree({
         brightness: { min: 0, max: 255 },
       },
       batch: { width: 8, order: "lsb-first", mapping: "scale", gray: true },
-      channel: { value: 0, radix: 10 },
+      channel: { kind: 'fixed', value: 0, radix: 10, bits: [], order: 'lsb-first', mapping: 'scale' },
       packed: {
+        bits: [],
         widths: { r: 8, g: 8, b: 8 },
         order: "lsb-first",
         mapping: "scale",
       },
     },
   },
-  model: { version: '7.0.0', example: 'ASCII_DIGITS', snapshotName: 'ModelShow-session', runName: 'ModelShow-run' },
+  model: {
+    version: '7.0.0', example: 'ASCII_DIGITS', snapshotName: 'ModelShow-session', runName: 'ModelShow-run',
+    defaults: { input: { startIndex: 0, count: 1 }, observe: { watch: [], read: [] } },
+    // 路径、输入和观察属于各自模型；更换默认示例不会套用 ASCII 的节点路径。
+    presets: {
+      ASCII_DIGITS: {
+        path: 'assets/ascii-bit-design/digits.jkm.json',
+        input: ['G1.Q1', 'G1.Q2', 'G1.Q10'],
+        observe: { watch: ['G1.Q24'], read: ['G1.Q11', 'G1.Q12', 'G1.Q13', 'G1.Q14', 'G1.Q25', 'G1.Q26', 'G1.Q27', 'G1.Q28'] },
+      },
+      M_FLOW: { path: 'examples/M_FLOW.jkm.json' },
+      M_PATH: { path: 'examples/M_PATH.jkm.json' },
+      M_SYNC: { path: 'examples/M_SYNC.jkm.json' },
+      M_TX: { path: 'examples/M_TX.jkm.json' },
+      M_NEST: { path: 'examples/M_NEST.jkm.json' },
+      M_REG: { path: 'examples/M_REG.jkm.json' },
+    },
+  },
   engine: { backend: 'javascript', maxUnits: 100000, frameUnits: 128, frameBudgetMs: 4, gpuBatch: 128 },
   gpu: { workgroupSize: 64, label: 'ModelShow JKRD7 EX', maxBatch: 128 },
   playback: { speed: { value: 1, min: 0.25, max: 4, step: 0.25 }, skip: true, duration: 0.85, maxVisuals: 400 },
   scene: {
+    camera: {
+      projection: { fov: 42, near: 0.1, far: 500 },
+      initial: { position: { x: 12, y: 8, z: 18 }, target: { x: 0, y: 0, z: 0 } },
+      fit: {
+        direction: { x: 0.18, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, minDistance: 4,
+        padding: { min: { x: 0.6, y: 0.9, z: 0.4 }, max: { x: 0.6, y: 0.6, z: 0.4 } },
+        occupancy: { horizontal: 0.82, vertical: 0.72 }, farMultiplier: 5, maxDistanceMultiplier: 4,
+      },
+    },
+    controls: {
+      staticMoving: true, rotateSpeed: 2, panSpeed: 0.8, minDistance: 0.2, maxDistance: 200,
+      wheel: { linePixels: 16, sensitivity: 0.0015, minExponent: -0.5, maxExponent: 0.5 },
+    },
     styles: {
       storage: { key: 'modelshow.jkm.network-styles.v1', version: 1 },
       edges: {
@@ -216,7 +263,8 @@ export const APP_CONFIG = freezeTree({
         },
         // Empty overrides inherit each node's existing input / JKI appearance.
         computationTypes: {
-          ex: { label: 'ex计算节点', overrides: {}, marker: { visible: true, color: '#173145', size: 30 } },
+          // x 的显隐与颜色独立，不继承名称显隐或场景前景色。
+          ex: { label: 'ex计算节点', overrides: {}, marker: { visible: true, color: '#ffffff', size: 30 } },
           q: { label: '无计算q节点', overrides: {} },
         },
         limits: { size: { min: 0.25, max: 4, step: 0.05 } },
@@ -226,7 +274,8 @@ export const APP_CONFIG = freezeTree({
     appearance: { backgroundEdge: '#08121f' },
     outputBoard: { enabled: false, rows: 3, cols: 3, scale: 3, brightnessMax: 255 },
     layout: "5D",
-    nodeMarker: { text: 'x' },
+    // 未应用 JKM 网络样式的视图（RGB）保留其原有标记默认值。
+    nodeMarker: { text: 'x', visible: true, color: '#173145', size: 30 },
     nodeLabelsHidden: false,
     blackBackground: false,
     renderer: {
@@ -252,6 +301,10 @@ export const APP_CONFIG = freezeTree({
     },
   },
   view: {
+    disclosures: {
+      jkm: { metadata: false },
+      rgb: { metadata: false, evaluation: true, bindings: false },
+    },
     inspector: {
       tree: { expandedDepth: 1 },
       sections: { state: true, calculation: false, events: false, definition: false },
@@ -264,8 +317,11 @@ export const APP_CONFIG = freezeTree({
     board: { width: 256, height: 128, cellSize: 24, zero: '#263b4d', one: '#81e7bf' },
     fileBytes: 32 * 1024 * 1024,
   },
-  input: { batch: ['G1.Q1', 'G1.Q2', 'G1.Q10'] },
-  observe: { watch: ['G1.Q24'], read: ['G1.Q11', 'G1.Q12', 'G1.Q13', 'G1.Q14', 'G1.Q25', 'G1.Q26', 'G1.Q27', 'G1.Q28'] },
   pool: { endpoint: './api/model-pool', timeoutMs: 5000 },
-  image: { maxPixels: 64, threshold: 128, background: '#ffffff', preview: { width: 256, height: 160 }, limits: { decodedPixels: 16000000, pixels: { min: 1, max: 4096, step: 1 }, threshold: { min: 0, max: 255, step: 1 } } },
+  image: {
+    maxPixels: 64, threshold: 128, background: '#ffffff',
+    inputMapping: { zeroIndex: 0, oneIndex: 1 },
+    preview: { width: 256, height: 160 },
+    limits: { decodedPixels: 16000000, pixels: { min: 1, max: 4096, step: 1 }, threshold: { min: 0, max: 255, step: 1 } },
+  },
 });

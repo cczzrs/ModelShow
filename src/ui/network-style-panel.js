@@ -3,9 +3,8 @@ import { resolveNodeStyle } from '../scene/network-style.js';
 
 /** Connect static controls to display preferences; model definitions remain untouched. */
 export class NetworkStylePanel {
-  constructor({ root, config, onChange = () => {}, getMarkerColor = () => config.nodes.computationTypes.ex.marker.color }) {
+  constructor({ root, config, onChange = () => {} }) {
     this.root = root; this.config = config; this.onChange = onChange;
-    this.getMarkerColor = getMarkerColor;
     this.browser = root.ownerDocument.defaultView;
     this.listeners = []; this.tagNodes = new Map();
     this.fields = Object.fromEntries([
@@ -132,9 +131,9 @@ export class NetworkStylePanel {
     const isEX = computation === 'ex', marker = this.state.computation.ex.marker;
     this.fields['node-marker-visible-field'].hidden = !isEX;
     this.fields['node-marker-color-field'].hidden = !isEX;
-    this.fields['node-marker-visible'].checked = marker?.visible ?? (style.labels !== false && this.config.nodes.computationTypes.ex.marker.visible);
-    this.fields['node-marker-color'].value = marker?.color ?? this.getMarkerColor();
-    this.fields['node-reset'].textContent = tag === undefined && computation === undefined ? '恢复该类默认样式' : '恢复继承样式';
+    this.fields['node-marker-visible'].checked = marker.visible;
+    this.fields['node-marker-color'].value = marker.color;
+    this.fields['node-reset'].textContent = tag === undefined && computation !== 'q' ? '恢复该类默认样式' : '恢复继承样式';
   }
 
   updateEdge() {

@@ -13,6 +13,19 @@ import {
 
 const DEFAULTS = APP_CONFIG.rgb.outputBoard;
 
+export function defaultLampIndex(count, defaults = DEFAULTS.editor) {
+  return Math.max(0, Math.min(count - 1, Math.trunc(defaults.selectedIndex)));
+}
+
+export function channelEditorValues(channel, defaults = DEFAULTS.channel) {
+  return {
+    kind: channel.kind, radix: defaults.radix,
+    value: (channel.kind === 'fixed' ? channel.value : defaults.value).toString(defaults.radix),
+    order: channel.order ?? defaults.order, mapping: channel.mapping ?? defaults.mapping,
+    bits: [...(channel.kind === 'bits' ? channel.bits : defaults.bits)],
+  };
+}
+
 function parseBits(text) {
   return text.trim() ? text.trim().split(/[\s,，]+/) : [];
 }
@@ -40,7 +53,7 @@ export class RGBOutputDisplayUI {
     this.outputs = [];
     this.values = new Map();
     this.errors = new Map();
-    this.selected = 0;
+    this.selected = defaultLampIndex(this.config.pixels.length);
     this.draftSelected = null;
     this.draftMode = null;
     this.modeDrafts = new Map();
@@ -225,7 +238,7 @@ export class RGBOutputDisplayUI {
     this.outputs = outputs.map(output => ({ ...output }));
     this.values = new Map();
     this.errors = new Map(outputs.filter(output => output.error).map(output => [output.id, output.error]));
-    this.selected = 0;
+    this.selected = defaultLampIndex(this.config.pixels.length);
     this.resetDraft();
     this.error.textContent = error ?? '';
     this.render();
@@ -374,13 +387,10 @@ export class RGBOutputDisplayUI {
     for (const key of CHANNELS) {
       const channel = pixel.channels[key];
       const controls = this.channelControls.get(key);
-      controls.kind.value = channel.kind;
-      controls.previousRadix = DEFAULTS.channel.radix;
-      controls.radix.value = DEFAULTS.channel.radix;
-      controls.value.value = channel.kind === 'fixed' ? channel.value : DEFAULTS.channel.value;
-      controls.order.value = channel.order ?? DEFAULTS.batch.order;
-      controls.mapping.value = channel.mapping ?? DEFAULTS.batch.mapping;
-      this.bitEditors.get(key).area.value = channel.kind === 'bits' ? channel.bits.join(', ') : '';
+      const values = channelEditorValues(channel);
+      for (const field of ['kind', 'radix', 'value', 'order', 'mapping']) controls[field].value = values[field];
+      controls.previousRadix = values.radix;
+      this.bitEditors.get(key).area.value = values.bits.join(', ');
       this.renderBitOrder(key);
       this.showChannelSource(key);
     }
@@ -431,7 +441,6 @@ export class RGBOutputDisplayUI {
         if (mode !== 'packed') throw error;
         next = this.modeDrafts.get(mode) ?? {
           mode: 'packed',
-          bits: [],
           ...structuredClone(DEFAULTS.packed),
         };
       }

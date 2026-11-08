@@ -99,11 +99,12 @@ test('marker preferences remain separate from ordinary node appearance', () => {
 test('explicit x visibility and color reach GPU glyphs independently of name settings and purpose labels', t => {
   const view = viewFixture(t), state = styles();
   const input = view.visuals.get('G1.Q1'), computing = view.visuals.get('G1.Q2');
-  const originalColor = config.nodes.computationTypes.ex.marker.color.slice(1);
+  const originalColor = APP_CONFIG.scene.nodeMarker.color.slice(1);
   assert.equal(input.q.textColor.getHexString(), originalColor);
   state.tags.pre = { ...state.nodes.input, labels: false };
   view.setNetworkStyles(state);
-  assert.equal(input.q.visible, false, 'unset marker preserves the existing purpose-label setting');
+  assert.equal(input.q.visible, config.nodes.computationTypes.ex.marker.visible, 'x uses its independent default even when names are hidden');
+  assert.equal(input.q.textColor.getHexString(), config.nodes.computationTypes.ex.marker.color.slice(1));
   view.setNodeLabelsHidden(true);
   state.computation.ex.marker = { visible: true, color: '#00ff88' };
   view.setNetworkStyles(state);
@@ -132,7 +133,7 @@ test('explicit x visibility and color reach GPU glyphs independently of name set
   assert.equal(input.q.visible, false); assert.equal(computing.q.visible, false);
 });
 
-test('custom x appearance survives scene colors, refreshes and model replacement in Canvas and resets to inheritance', t => {
+test('custom x appearance survives scene colors, refreshes and model replacement in Canvas and resets to independent defaults', t => {
   const view = viewFixture(t, [
     { id: 'G1.Q3', key: 'G1.Q3', initial: 0, hasEX: false, tags: [], errors: [], tokens: [] },
   ]), state = styles();
@@ -166,10 +167,10 @@ test('custom x appearance survives scene colors, refreshes and model replacement
   state.computation.ex = {};
   view.setNetworkStyles(state); renderer.render(view.scene, view.camera);
   assert.deepEqual(renderer.labels.filter(label => label.text === 'x').map(label => label.color),
-    Array(2).fill(new THREE.Color('#dd8844').getStyle()));
+    Array(2).fill(new THREE.Color(config.nodes.computationTypes.ex.marker.color).getStyle()));
   view.setNetworkStyles(null);
   view.appearance = null; view.syncLabelAppearance();
-  assert.equal(view.visuals.get('G1.Q1').q.textColor.getHexString(), config.nodes.computationTypes.ex.marker.color.slice(1));
+  assert.equal(view.visuals.get('G1.Q1').q.textColor.getHexString(), APP_CONFIG.scene.nodeMarker.color.slice(1));
 });
 
 test('drawing projection copies purpose tags without altering the compiled definition', () => {
@@ -282,7 +283,8 @@ test('node style hides cube, all labels, incident edges, signals and picking; re
   state.tags.pre.visible = true; state.tags.pre.labels = false;
   view.setNetworkStyles(state);
   assert.equal(node.mesh.visible, true);
-  assert.ok([node.title, node.count, node.q].every(label => !label.visible));
+  assert.ok([node.title, node.count].every(label => !label.visible));
+  assert.equal(node.q.visible, config.nodes.computationTypes.ex.marker.visible);
   assert.equal(view.pickObjects().includes(node.mesh), true);
   assert.equal(view.signals[0].text.visible, true);
   assert.equal(view.engine, engine); assert.equal(engine.counts.get('G1.Q1'), 2);

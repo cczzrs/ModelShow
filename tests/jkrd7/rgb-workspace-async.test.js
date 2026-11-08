@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RGBWorkspaceUI } from '../../src/ui/rgb-workspace-ui.js';
+import { RGBWorkspaceUI, initialRGBDisplay } from '../../src/ui/rgb-workspace-ui.js';
+import { APP_CONFIG } from '../../html/config.js';
 import { compileModel } from '../../src/jk/model-schema.js';
 import { defaultDisplay } from '../../src/ui/rgb-output-display.js';
 import { captureRGBConfig } from '../../src/ui/rgb-workspace-config.js';
@@ -78,4 +79,69 @@ test('a pending RGB deactivation cannot override a newer activation when a GPU u
   assert.equal(await RGBWorkspaceUI.prototype.setActive.call(state, false), true);
   assert.equal(state.active, false);
   assert.deepEqual(motion, [true, false]);
+});
+
+test('initial RGB output assignment obeys its own enable, start and gray defaults', () => {
+  const display = defaultDisplay(1, 1);
+  const outputs = Array.from({ length: 32 }, (_, index) => ({ id: `G1.Q${index + 1}`, source: `G1.Q${index + 1}` }));
+  assert.equal(initialRGBDisplay(display, outputs, { enabled: false, startIndex: 0, gray: false }), display);
+  assert.equal(initialRGBDisplay(display, [], { enabled: true, startIndex: 0, gray: false }), display);
+  assert.equal(initialRGBDisplay(display, outputs, { enabled: true, startIndex: 99, gray: false }), display);
+  const gray = initialRGBDisplay(display, outputs, { enabled: true, startIndex: 3, gray: true });
+  for (const channel of ['r', 'g', 'b']) assert.deepEqual(gray.pixels[0].channels[channel].bits, outputs.slice(3, 11).map(output => output.id));
+  const rgb = initialRGBDisplay(display, outputs, { enabled: true, startIndex: 1, gray: false });
+  assert.equal(rgb.pixels[0].channels.r.bits[0], outputs[1].id);
+  assert.equal(rgb.pixels[0].channels.g.bits[0], outputs[9].id);
+  assert.equal(rgb.pixels[0].channels.b.bits[0], outputs[17].id);
+  assert.deepEqual(display, defaultDisplay(1, 1));
+});
+
+test('RGB processing waits for configured backend startup and stops if disposed while waiting', async t => {
+  const before = globalThis.document;
+  globalThis.document = { getElementById: id => ({ value: 'webgpu', checked: true }) };
+  t.after(() => { globalThis.document = before; });
+  const waiting = deferred(), calls = [];
+  const state = {
+    backendReady: waiting.promise, disposed: false,
+    engine: { runBatchAsync: async () => { calls.push('gpu'); return null; } },
+    gpu: {}, remember() {},
+  };
+  const processing = RGBWorkspaceUI.prototype.process.call(state);
+  await Promise.resolve(); assert.deepEqual(calls, []);
+  waiting.resolve(true); await processing;
+  assert.deepEqual(calls, ['gpu']);
+  const leaving = deferred(); state.backendReady = leaving.promise;
+  const abandoned = RGBWorkspaceUI.prototype.process.call(state);
+  state.disposed = true; leaving.resolve(true); await abandoned;
+  assert.deepEqual(calls, ['gpu']);
+});
+
+test('RGB queue rendering uses the configured shared row limit', t => {
+  class Element {
+    constructor() { this.children = []; this.parts = new Map(); this.classList = { toggle() {} }; }
+    querySelector(selector) { if (!this.parts.has(selector)) this.parts.set(selector, new Element()); return this.parts.get(selector); }
+    replaceChildren(...children) { this.children = children; }
+    append(child) { this.children.push(child); }
+    addEventListener() {}
+    cloneNode() { return new Element(); }
+  }
+  const before = globalThis.document, elements = new Map();
+  globalThis.document = { getElementById(id) {
+    if (!elements.has(id)) elements.set(id, new Element());
+    return elements.get(id);
+  } };
+  t.after(() => { globalThis.document = before; });
+  document.getElementById('rgb-queue-row-template').content = { firstElementChild: new Element() };
+  const count = APP_CONFIG.view.queues.rows + 4;
+  const context = {
+    engine: { events: Array.from({ length: count }, (_, index) => ({ source: `G1.Q${index + 1}`, to: [] })), tasks: [],
+      outputs: [], stats: { nodeTasks: 0, operations: 0 }, units: 0, pending: count, history: [], idle: false },
+    model: { jki: new Map(), triggerRefs: new Map(), sourceRefs: new Map() },
+    bindings: { inputs: [], observe: { read: [] } }, gpu: {}, view: { update() {} }, outputUI: { update() {} },
+    playbackSettings() {}, renderInspector() {},
+  };
+  RGBWorkspaceUI.prototype.render.call(context);
+  const rows = elements.get('rgb-queue-rows').children;
+  assert.equal(rows.length, APP_CONFIG.view.queues.rows);
+  assert.equal(rows.at(-1).querySelector('[data-node-name]').textContent, `G1.Q${APP_CONFIG.view.queues.rows}`);
 });

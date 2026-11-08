@@ -8,6 +8,7 @@ import {
   mapPixelData,
 } from './rgb-image-input.js';
 import { decodeInputImage } from './rgb-image-loader.js';
+import { importedSelection, importedImageView, fittedImageView, zoomedImageView, wheelImageScale } from './rgb-image-view.js';
 
 // HTML owns the dialog. The source canvas stays at decoded resolution;
 // the viewport changes only how that image is displayed.
@@ -125,8 +126,7 @@ export class ImageInputUI {
       event.preventDefault();
       if (!this.source || this.drag) return;
       const point = this.localPoint(event);
-      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.view.height : 1);
-      this.zoom(this.view.scale * Math.exp(-delta * 0.0015), point.x, point.y);
+      this.zoom(wheelImageScale(this.view, event.deltaY, event.deltaMode), point.x, point.y);
     }, { passive: false });
     this.listen(this.dialog, 'keydown', event => {
       if (event.code === 'Space' && !event.target.closest('input,textarea,select,button')) {
@@ -220,9 +220,8 @@ export class ImageInputUI {
       if (!context) throw new Error('无法创建图片数据画布');
       context.drawImage(decoded.bitmap, 0, 0);
       context.getImageData(0, 0, 1, 1); // Check allocation/readability before replacing a valid source.
-      const selection = clampSelection(this.selection, decoded.width, decoded.height);
-      selection.x = Math.floor((decoded.width - selection.width) / 2);
-      selection.y = Math.floor((decoded.height - selection.height) / 2);
+      const selection = importedSelection(this.selection, decoded.width, decoded.height);
+      const view = importedImageView(this.view, decoded);
       if (this.source) this.source.width = this.source.height = 0;
       this.source = candidate;
       this.sourceContext = context;
@@ -230,7 +229,7 @@ export class ImageInputUI {
       this.sourcePreset = presetName;
       candidate = null;
       this.selection = selection;
-      this.fit();
+      this.view = view;
     } catch (error) {
       if (generation === this.generation && this.dialog.open) this.error(`图片导入失败：${error.message}`);
     } finally {
@@ -350,7 +349,8 @@ export class ImageInputUI {
     buffer.getContext('2d').putImageData(new ImageData(pixels.rgba, pixels.width, pixels.height), 0, 0);
     const ctx = this.preview.getContext('2d');
     const { width, height } = this.preview;
-    const scale = Math.min((width - 12) / pixels.width, (height - 12) / pixels.height);
+    const padding = APP_CONFIG.rgb.imageInput.preview.padding;
+    const scale = Math.min((width - padding) / pixels.width, (height - padding) / pixels.height);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(buffer, (width - pixels.width * scale) / 2, (height - pixels.height * scale) / 2, pixels.width * scale, pixels.height * scale);
     buffer.width = buffer.height = 0;
@@ -372,20 +372,13 @@ export class ImageInputUI {
 
   fit() {
     if (!this.source) return;
-    this.view.scale = Math.min((this.view.width - 32) / this.source.width, (this.view.height - 32) / this.source.height, APP_CONFIG.rgb.imageInput.view.maxScale);
-    this.view.x = (this.view.width - this.source.width * this.view.scale) / 2;
-    this.view.y = (this.view.height - this.source.height * this.view.scale) / 2;
+    this.view = fittedImageView(this.view, this.source);
     this.draw();
   }
 
   zoom(scale, x, y) {
     if (!this.source) return;
-    const minimum = Math.min(this.view.width / this.source.width, this.view.height / this.source.height, 1) / 16;
-    scale = Math.max(minimum, Math.min(APP_CONFIG.rgb.imageInput.view.maxScale, scale));
-    const ratio = scale / this.view.scale;
-    this.view.x = x - (x - this.view.x) * ratio;
-    this.view.y = y - (y - this.view.y) * ratio;
-    this.view.scale = scale;
+    this.view = zoomedImageView(this.view, this.source, scale, x, y);
     this.draw();
   }
 

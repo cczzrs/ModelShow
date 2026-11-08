@@ -20,28 +20,29 @@ function choice(value, values, label) {
 
 export const fixed = value => ({ kind: 'fixed', value });
 
-export function emptyPixel() {
-  return {
-    mode: 'channels',
-    channels: {
-      r: fixed(DEFAULTS.channel.value),
-      g: fixed(DEFAULTS.channel.value),
-      b: fixed(DEFAULTS.channel.value),
-    },
-  };
+export function defaultChannel(defaults = DEFAULTS.channel) {
+  return channel(defaults);
 }
 
-export function defaultDisplay(rows = DEFAULTS.rows, cols = DEFAULTS.cols) {
-  const limits = DEFAULTS.limits.dimension;
+export function emptyPixel(defaults = DEFAULTS) {
+  const mode = choice(defaults.pixel.mode, ['channels', 'packed'], '默认灯配置模式');
+  const pixel = mode === 'channels'
+    ? { mode, channels: Object.fromEntries(CHANNELS.map(key => [key, defaultChannel(defaults.channel)])) }
+    : { mode, ...structuredClone(defaults.packed) };
+  return validatePixel(pixel);
+}
+
+export function defaultDisplay(rows = DEFAULTS.rows, cols = DEFAULTS.cols, defaults = DEFAULTS) {
+  const limits = defaults.limits.dimension;
   integer(rows, limits.min, limits.max, '行数');
   integer(cols, limits.min, limits.max, '列数');
   return {
-    version: DEFAULTS.version,
-    enabled: DEFAULTS.enabled,
+    version: defaults.version,
+    enabled: defaults.enabled,
     rows,
     cols,
-    scale: DEFAULTS.scale,
-    pixels: Array.from({ length: rows * cols }, emptyPixel),
+    scale: defaults.scale,
+    pixels: Array.from({ length: rows * cols }, () => emptyPixel(defaults)),
   };
 }
 
@@ -72,6 +73,26 @@ function channel(config) {
   };
 }
 
+function validatePixel(pixel) {
+  if (pixel?.mode === 'channels') {
+    return {
+      mode: 'channels',
+      channels: Object.fromEntries(CHANNELS.map(key => [key, channel(pixel.channels?.[key] ?? DEFAULTS.channel)])),
+    };
+  }
+  if (pixel?.mode !== 'packed') fail('灯配置模式无效');
+  const limits = DEFAULTS.limits;
+  const widths = Object.fromEntries(CHANNELS.map(key => [
+    key,
+    integer(pixel.widths?.[key], limits.channelBits.min, limits.channelBits.max, `${key.toUpperCase()} 位数`),
+  ]));
+  const bits = bitList(pixel.bits, limits.channelBits.max * CHANNELS.length);
+  if (bits.length !== Object.values(widths).reduce((total, width) => total + width, 0)) {
+    fail('打包 观察位 数量必须等于 R/G/B 位数之和');
+  }
+  return { mode: 'packed', bits, widths, order: order(pixel.order), mapping: mapping(pixel.mapping) };
+}
+
 export function validateDisplay(raw) {
   if (!raw || raw.version !== 1) fail('不支持的画板配置版本');
   if (typeof raw.enabled !== 'boolean') fail('显示开关必须为布尔值');
@@ -87,22 +108,7 @@ export function validateDisplay(raw) {
   }
   const pixels = raw.pixels.map((pixel, index) => {
     try {
-      if (pixel?.mode === 'channels') {
-        return {
-          mode: 'channels',
-          channels: Object.fromEntries(CHANNELS.map(key => [key, channel(pixel.channels?.[key] ?? fixed(DEFAULTS.channel.value))])),
-        };
-      }
-      if (pixel?.mode !== 'packed') fail('灯配置模式无效');
-      const widths = Object.fromEntries(CHANNELS.map(key => [
-        key,
-        integer(pixel.widths?.[key], limits.channelBits.min, limits.channelBits.max, `${key.toUpperCase()} 位数`),
-      ]));
-      const bits = bitList(pixel.bits, limits.channelBits.max * CHANNELS.length);
-      if (bits.length !== Object.values(widths).reduce((total, width) => total + width, 0)) {
-        fail('打包 观察位 数量必须等于 R/G/B 位数之和');
-      }
-      return { mode: 'packed', bits, widths, order: order(pixel.order), mapping: mapping(pixel.mapping) };
+      return validatePixel(pixel);
     } catch (error) {
       fail(`灯 ${index + 1}：${error.message}`);
     }

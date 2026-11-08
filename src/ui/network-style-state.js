@@ -34,11 +34,10 @@ function nodeOverrides(raw, defaults, base, limits) {
   return Object.fromEntries(Object.keys(overrides).map(key => [key, normalized[key]]));
 }
 
-function markerOverrides(raw) {
-  const visible = own(raw, 'visible'), tint = color(own(raw, 'color'));
+function markerStyle(raw, defaults) {
   return {
-    ...(typeof visible === 'boolean' ? { visible } : {}),
-    ...(tint === undefined ? {} : { color: tint }),
+    visible: boolean(own(raw, 'visible'), defaults.visible),
+    color: color(own(raw, 'color'), defaults.color),
   };
 }
 
@@ -57,8 +56,7 @@ export function normalizeNetworkStyles(raw, config) {
     computation: Object.fromEntries(Object.entries(config.nodes.computationTypes).map(([key, defaults]) => {
       const raw = own(computation, key);
       const overrides = nodeOverrides(raw, defaults.overrides, config.nodes.types.node, config.nodes.limits);
-      const marker = defaults.marker ? markerOverrides(own(raw, 'marker')) : {};
-      return [key, { ...overrides, ...(Object.keys(marker).length ? { marker } : {}) }];
+      return [key, { ...overrides, ...(defaults.marker ? { marker: markerStyle(own(raw, 'marker'), defaults.marker) } : {}) }];
     })),
     // A tag is model-authored text, even when it is named "__proto__".
     // fromEntries creates own data properties without invoking prototype setters.

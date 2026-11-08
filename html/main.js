@@ -12,6 +12,8 @@ import { setupSceneFullscreen } from '../src/scene/fullscreen.js';
 import { NodeTree } from '../src/ui/node-tree.js';
 import { CosmicWorkspace } from '../src/ui/cosmic-workspace.js';
 import { NetworkStylePanel } from '../src/ui/network-style-panel.js';
+import { syncSceneControlButtons, initializeConfiguredBackend } from '../src/ui/workspace-settings.js';
+import { modelDefaults } from '../src/ui/model-defaults.js';
 
 const $ = id => document.getElementById(id);
 const jkmPanel = $('jkm-panel');
@@ -25,14 +27,17 @@ for (const section of nodeInspector.querySelectorAll('[data-inspector-section]')
   section.open = APP_CONFIG.view.inspector.sections[section.dataset.inspectorSection];
 }
 $('events-records').open = APP_CONFIG.view.queues.events.records.expanded;
+$('jkm-metadata-details').open = APP_CONFIG.view.disclosures.jkm.metadata;
+syncSceneControlButtons({ labels: $('node-labels'), background: $('black-background') }, APP_CONFIG.scene);
 const clone = id => $(id).content.firstElementChild.cloneNode(true);
 const pretty = value => JSON.stringify(value, null, 2);
 const builtins = seedPool.permanent.map(entry => entry.model);
 let model, engine, selected, modelPath, running = false, inFlight = null, timer = null;
 let schedulerVersion = 0, imageLoadVersion = 0, poolPending = false;
+let disposed = false;
 const fileVersions = new Map();
 let runStart = 0, scriptBatches = null, nextBatch = 0, pool = null, authCommand = null, imageBitmap = null;
-let observation = structuredClone(APP_CONFIG.observe);
+let observation = structuredClone(APP_CONFIG.model.defaults.observe);
 const nodeTree = new NodeTree({
   element: $('node-tree'),
   groupTemplate: $('node-tree-group-template'),
@@ -42,6 +47,7 @@ const nodeTree = new NodeTree({
   expandedDepth: APP_CONFIG.view.inspector.tree.expandedDepth,
 });
 const gpu = new GPUCompute((text, ready) => {
+  if (disposed) return;
   $('compute-message').textContent = text;
   $('compute-status').textContent = ready && $('backend').value === 'webgpu' ? 'WebGPU EX' : 'JavaScript';
 });
@@ -70,7 +76,6 @@ jkmPanel.addEventListener('network-style-error', event => message(event.detail.m
 const networkStylePanel = new NetworkStylePanel({
   root: jkmPanel, config: APP_CONFIG.scene.styles,
   onChange: styles => view.setNetworkStyles(styles),
-  getMarkerColor: () => view.appearance?.foreground ?? APP_CONFIG.scene.styles.nodes.computationTypes.ex.marker.color,
 });
 jkmPanel.addEventListener('cosmic-workspace-error', event => message(event.detail.message, true));
 jkmPanel.addEventListener('cosmic-window-show', event => {
@@ -123,10 +128,11 @@ function currentScript(batches = [JSON.parse($('input-json').value)]) {
 }
 function loadModel(raw, path, builtin = false) {
   const compiled = compileModel(raw);
-  const observe = builtin && raw.jkm === APP_CONFIG.model.example ? structuredClone(APP_CONFIG.observe) : { watch: [], read: [] };
+  const defaults = modelDefaults(compiled, { builtin });
+  const observe = defaults.observe;
   const next = new JKEngine(compiled, { observe, historyLimit: APP_CONFIG.view.traceRows });
   // Replace only after the model and execution capability have both been checked.
-  model = compiled; engine = next; observation = observe; modelPath = path || `${raw.jkm}.jkm.json`;
+  model = compiled; engine = next; observation = observe; modelPath = path || defaults.path;
   scriptBatches = null; nextBatch = 0; selected = null;
   $('model-name').textContent = raw.jkm;
   $('model-md5').textContent = `JKRD ${raw.version}`;
@@ -138,7 +144,7 @@ function loadModel(raw, path, builtin = false) {
   $('events-queue-name').textContent = engine.queue;
   $('tasks-queue-name').textContent = engine.queue;
   $('model-json').value = pretty(model.raw); $('model-path').value = modelPath;
-  $('input-json').value = pretty(builtin && raw.jkm === APP_CONFIG.model.example ? APP_CONFIG.input.batch : model.inputs.slice(0, 1));
+  $('input-json').value = pretty(defaults.input);
   $('script-json').value = pretty(currentScript());
   $('watch-json').value = pretty(observation.watch); $('read-json').value = pretty(observation.read);
   $('snapshot-json').value = '';
@@ -154,7 +160,9 @@ function loadModel(raw, path, builtin = false) {
   }
   nodeTree.setModel(model, selected);
   for (const id of ['image-zero', 'image-one']) options($(id), model.inputs.map(path => [path, path]));
-  if (model.inputs.length > 1) $('image-one').value = model.inputs[1];
+  for (const [id, index] of [['image-zero', APP_CONFIG.image.inputMapping.zeroIndex], ['image-one', APP_CONFIG.image.inputMapping.oneIndex]]) {
+    $(id).value = model.inputs[Math.min(index, model.inputs.length - 1)] ?? '';
+  }
   networkStylePanel.setModel(model);
   view.setModel(model); render();
   message(`已加载 ${raw.jkm} · JKRD7 定义校验通过。`);
@@ -277,6 +285,7 @@ function render() {
 }
 async function processUnit(single = false) {
   let result;
+  if ($('backend').value === 'webgpu') await backendReady;
   if ($('backend').value !== 'webgpu') result = engine.step();
   else result = single || !$('skip').checked ? await engine.stepAsync(input => gpu.compute(input)) : await engine.runBatchAsync(inputs => gpu.computeBatch(inputs), { maxTasks: APP_CONFIG.engine.gpuBatch, maxEventUnits: APP_CONFIG.engine.frameUnits });
   if (result && (single || !$('skip').checked)) { view.update(engine, selected); view.onUnit(result, { force: single }); }
@@ -325,6 +334,7 @@ for (const [id, limits] of [['speed', APP_CONFIG.playback.speed], ['image-pixels
 }
 for (const [id, size] of [['output-board', APP_CONFIG.view.board], ['image-preview', APP_CONFIG.image.preview]]) { $(id).width = size.width; $(id).height = size.height; }
 $('backend').value = APP_CONFIG.engine.backend;
+let backendReady = initializeConfiguredBackend(gpu, APP_CONFIG.engine.backend, () => disposed);
 $('speed').value = APP_CONFIG.playback.speed.value; $('speed-value').textContent = `${$('speed').value}×`;
 $('skip').checked = APP_CONFIG.playback.skip;
 updatePlayback();
@@ -341,10 +351,13 @@ $('speed').addEventListener('input', () => { $('speed-value').textContent = `${$
 $('skip').addEventListener('change', updatePlayback);
 $('example-select').addEventListener('change', () => boundary(() => {
   const raw = builtins.find(item => item.jkm === $('example-select').value);
-  loadModel(raw, raw.jkm === APP_CONFIG.model.example ? 'assets/ascii-bit-design/digits.jkm.json' : `examples/${raw.jkm}.jkm.json`, true);
+  loadModel(raw, undefined, true);
 }).catch(error => message(error.message, true)));
 $('backend').addEventListener('change', () => boundary(async () => {
-  if ($('backend').value === 'webgpu') await gpu.init();
+  if ($('backend').value === 'webgpu') {
+    backendReady = initializeConfiguredBackend(gpu, $('backend').value, () => disposed);
+    await backendReady;
+  }
   else $('compute-message').textContent = 'JavaScript 串行计算；事件优先。';
   render();
 }).catch(error => message(error.message, true)));
@@ -505,9 +518,9 @@ for (const mode of ['rgb', 'jkm']) {
   });
 }
 
+window.addEventListener('pagehide', () => { disposed = true; pause(); desktop.dispose(); nodeTree.dispose(); rgbWorkspace?.dispose(); view.dispose(); gpu.dispose(); imageBitmap?.close(); });
 try {
-  loadModel(builtins.find(item => item.jkm === APP_CONFIG.model.example), 'assets/ascii-bit-design/digits.jkm.json', true);
-  await view.ready;
-  if (activeWorkspace !== 'jkm') await switchWorkspace(activeWorkspace);
-} catch (error) { message(`初始化失败：${error.message}`, true); }
-window.addEventListener('pagehide', () => { pause(); desktop.dispose(); nodeTree.dispose(); rgbWorkspace?.dispose(); view.dispose(); gpu.dispose(); imageBitmap?.close(); });
+  loadModel(builtins.find(item => item.jkm === APP_CONFIG.model.example), undefined, true);
+  await Promise.all([view.ready, backendReady]);
+  if (!disposed && activeWorkspace !== 'jkm') await switchWorkspace(activeWorkspace);
+} catch (error) { if (!disposed) message(`初始化失败：${error.message}`, true); }

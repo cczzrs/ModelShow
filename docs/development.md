@@ -58,7 +58,30 @@
 
 页面使用原生 HTML/CSS 与 JavaScript ES modules。固定控件和 `<template>` 由 HTML 定义；JavaScript 只克隆模板、填充 textContent／表单属性并绑定事件。不要拼接 HTML、动态构建页面结构或生成 CSS。选择和错误状态通过 class 切换。
 
-产品默认值在 `APP_CONFIG` 中按职责分组：workspace、rgb、model、engine、gpu、playback、scene、view、input、observe、pool、image。`workspace.active` 默认是 jkm；`rgb` 下分别管理图片提取和输出灯阵的原默认配置。运行中的可变值保存在运行状态，不能修改冻结配置。JKM 文件中的初值是模型数据，不用界面默认值补齐缺失规则。
+产品默认值统一在 `html/config.js` 的冻结树 `APP_CONFIG` 中。固定 HTML 仅声明控件；初始化、恢复默认与缺失缓存字段均读取此树。已有有效浏览器设置优先于默认值，调整默认值不会覆盖用户缓存。运行中的模型选择、文件内容、当前相机位置和解码后的画布尺寸属于运行状态；JKM 初值属于模型数据，不用界面默认补齐规则。
+
+| 配置路径 | 职责 |
+| --- | --- |
+| `workspace.active` | 初始 RGB／JKM 工作区 |
+| `desktop.display / windows / geometry / split / rail` | 单板双板、模块位置与尺寸、显隐收展、层级、侧栏宽度及占比 |
+| `desktop.theme / appearance / windows.*.appearance / rail.appearance` | 全局毛玻璃与颜色、模块公共外观、窗口局部覆盖、菜单和程序坞图标文字 |
+| `scene.camera / controls` | 相机投影、初始位置、复位方向与留白、旋转平移和缩放参数 |
+| `scene.styles.edges / nodes` | 连线和节点样式、范围与缓存键；`nodes.computationTypes.ex.marker` 独立管理 JKM 的 x 显隐、颜色和字号 |
+| `scene.nodeMarker / renderer / layout / outputBoard` | 未应用 JKM 样式的视图标记、渲染后端、网络布局及场景灯阵基础值 |
+| `scene.nodeLabelsHidden / blackBackground` | 初始名称显隐和纯黑背景；按钮与渲染同时读取 |
+| `view.disclosures / inspector / queues` | 两个工作区的折叠状态、节点树展开层级、队列显示上限 |
+| `model.example / presets / defaults` | 默认示例、每个模型的文件标识及输入／观察预设、导入模型的通用默认；切换默认示例不会误用另一模型的路径 |
+| `engine / gpu / playback` | 计算平台、预算、GPU 参数及播放速度；默认 WebGPU 会在两种工作区启动时初始化，计算等待初始化结果 |
+| `image` | JKM 图片阈值、像素上限、入口选择索引及预览 |
+| `rgb.imageInput` | RGB 图片选区、编码位序、导入定位策略、视图、滚轮与预览参数 |
+| `rgb.outputBoard` | 默认灯模式、通道来源、亮度进制、位串、初始选中灯、首次映射与批量工具 |
+| `pool` | 模型池地址和超时 |
+
+外观继承只在树内进行：公共值来自 `desktop.appearance`，每个窗口可在 `desktop.windows.*.appearance` 覆盖；单板布局覆盖来自 `desktop.display.modes.single.windows`。ex／q 的节点属性默认继承基础类别，显式用途标签保持优先；x 的颜色和显隐独立，不继承场景前景色或名称显隐。RGB 保留 `scene.nodeMarker` 的原有基础配色。
+
+RGB 图片的 `import.selection` 支持 `configured`（默认，读取配置坐标和尺寸）、`center`（保留当前尺寸并居中）与 `retain`（保留当前选区）；均按图片边界裁剪。`import.view` 支持 `fit`（默认，根据图片与窗口尺寸适应）和 `configured`（读取 `view.scale/x/y`）。适应策略下坐标是计算结果，切换到 configured 才使用固定初始视图坐标。
+
+RGB 灯阵的 `pixel.mode` 可为 channels／packed，`channel.kind` 可为 fixed／bits。选择 bits 或 packed 默认模式时，必须同时配置合法的观察路径；packed 位数必须匹配通道位宽总和，不自动生成模型路径。`initialAssignment` 控制首次模型加载是否自动分配输出、起始输出索引与灰度方式；它与 `batch` 批量工具的初始选项职责不同。
 
 Canvas／WebGPU 绘图属于图形展示；其位图、几何、缓冲区与临时图像资源按所有权管理。图片取样、文件操作或异步设备操作完成前，应防止旧请求覆盖新模型。界面不得在一个活动处理单元中途注入通知或保存快照。
 

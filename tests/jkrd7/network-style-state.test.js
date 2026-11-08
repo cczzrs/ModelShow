@@ -7,6 +7,8 @@ import { resolveNodeStyle } from '../../src/scene/network-style.js';
 
 const config = APP_CONFIG.scene.styles;
 const copy = value => structuredClone(value);
+const markerDefaults = () => { const { visible, color } = config.nodes.computationTypes.ex.marker; return { visible, color }; };
+const computationDefaults = () => ({ ex: { marker: markerDefaults() }, q: {} });
 
 test('network preference defaults preserve established colors and contain no product labels or model data', () => {
   const state = defaultNetworkStyles(config);
@@ -15,7 +17,7 @@ test('network preference defaults preserve established colors and contain no pro
   assert.deepEqual(Object.keys(state.nodes), ['input', 'node', 'observe']);
   assert.deepEqual(state.edges.J, { color: '#e898c0', opacity: 0.4, length: 1, visible: true });
   assert.deepEqual(state.nodes.input, { color: '#73aaff', size: 1, visible: true, labels: true });
-  assert.deepEqual(state.computation, { ex: {}, q: {} });
+  assert.deepEqual(state.computation, computationDefaults());
   assert.deepEqual(state.tags, {});
   state.edges.J.color = '#112233';
   assert.equal(config.edges.types.J.color, '#e898c0');
@@ -55,7 +57,7 @@ test('saved preferences without computation overrides retain every base and purp
   saved.nodes.node.size = 1.5;
   saved.tags.pre = { color: '#abcdef', size: 2, visible: false, labels: true };
   const restored = normalizeNetworkStyles(saved, config);
-  assert.deepEqual(restored.computation, { ex: {}, q: {} });
+  assert.deepEqual(restored.computation, computationDefaults());
   assert.deepEqual(restored.nodes, saved.nodes);
   assert.deepEqual(restored.tags, saved.tags);
   for (const hasEX of [true, false]) {
@@ -73,7 +75,7 @@ test('computation preferences keep only explicit supported style properties', ()
   };
   const restored = normalizeNetworkStyles(saved, config);
   assert.deepEqual(restored.computation, {
-    ex: { color: '#abcdef', size: config.nodes.limits.size.max, visible: false }, q: { labels: false },
+    ex: { color: '#abcdef', size: config.nodes.limits.size.max, visible: false, marker: markerDefaults() }, q: { labels: false },
   });
   assert.deepEqual(normalizeNetworkStyles(JSON.parse(JSON.stringify(restored)), config), restored);
 });
@@ -110,7 +112,7 @@ class Field {
   querySelector() { return this.status; }
 }
 
-function harness(saved = null, { readFails = false, writeFails = false, legend = [], getMarkerColor } = {}) {
+function harness(saved = null, { readFails = false, writeFails = false, legend = [], settings = config } = {}) {
   const fields = new Map(), changes = [], writes = [], errors = [];
   const toggles = Object.fromEntries(Object.keys(config.edges.types).map(key => {
     const button = new Field(); button.dataset.networkEdgeToggle = key; button.status = new Field();
@@ -137,7 +139,7 @@ function harness(saved = null, { readFails = false, writeFails = false, legend =
     },
     dispatchEvent: event => errors.push(event),
   };
-  const panel = new NetworkStylePanel({ root, config, onChange: state => changes.push(copy(state)), getMarkerColor });
+  const panel = new NetworkStylePanel({ root, config: settings, onChange: state => changes.push(copy(state)) });
   const field = name => fields.get(`network-${name}`);
   return { panel, field, changes, writes, errors, storage, toggles };
 }
@@ -231,10 +233,10 @@ test('both computation groups edit only the changed property and persist indepen
   const original = copy(panel.state);
   for (const [group, hasEX] of [['ex', true], ['q', false]]) {
     field('node-type').value = `computation:${group}`; field('node-type').fire('change');
-    assert.equal(field('node-reset').textContent, '恢复继承样式');
+    assert.equal(field('node-reset').textContent, group === 'ex' ? '恢复该类默认样式' : '恢复继承样式');
     assert.equal(field('node-color').value, original.nodes.node.color);
     field('node-visible').checked = false; field('node-visible').fire('change');
-    assert.deepEqual(panel.state.computation[group], { visible: false });
+    assert.deepEqual(panel.state.computation[group], { ...original.computation[group], visible: false });
     assert.deepEqual(resolveNodeStyle({ isInput: true, hasEX }, panel.state), { ...original.nodes.input, visible: false });
     field('node-color').value = group === 'ex' ? '#112233' : '#aabbcc'; field('node-color').fire('input');
     field('node-size').value = group === 'ex' ? '2' : '1.5'; field('node-size').fire('input');
@@ -245,7 +247,7 @@ test('both computation groups edit only the changed property and persist indepen
   assert.deepEqual(panel.state.nodes, original.nodes);
   assert.deepEqual(panel.state.edges, original.edges);
   assert.deepEqual(panel.state.tags, {});
-  assert.deepEqual(panel.state.computation.ex, { visible: false, color: '#112233', size: 2, labels: false });
+  assert.deepEqual(panel.state.computation.ex, { visible: false, color: '#112233', size: 2, labels: false, marker: markerDefaults() });
   assert.deepEqual(panel.state.computation.q, { visible: false, color: '#aabbcc', size: 1.5, labels: false });
   const restored = harness(writes.at(-1)[1]);
   assert.deepEqual(restored.panel.state, panel.state);
@@ -281,8 +283,9 @@ test('purpose controls inherit the correct computation group and reset back to i
 });
 
 test('x marker controls appear only for ex, preserve other preferences, and restore cached explicit values', () => {
-  let sceneColor = '#abcdef';
-  const { panel, field, writes } = harness(null, { getMarkerColor: () => sceneColor });
+  const settings = copy(config);
+  settings.nodes.computationTypes.ex.marker = { visible: true, color: '#abcdef', size: 30 };
+  const { panel, field, writes } = harness(null, { settings });
   const original = copy(panel.state);
   assert.equal(field('node-marker-visible-field').hidden, true);
   assert.equal(field('node-marker-color-field').hidden, true);
@@ -290,10 +293,10 @@ test('x marker controls appear only for ex, preserve other preferences, and rest
   assert.equal(field('node-marker-visible-field').hidden, false);
   assert.equal(field('node-marker-color-field').hidden, false);
   assert.equal(field('node-marker-visible').checked, true);
-  assert.equal(field('node-marker-color').value, sceneColor);
+  assert.equal(field('node-marker-color').value, settings.nodes.computationTypes.ex.marker.color);
   assert.equal(writes.length, 0);
   field('node-marker-visible').checked = false; field('node-marker-visible').fire('change');
-  assert.deepEqual(panel.state.computation.ex, { marker: { visible: false } });
+  assert.deepEqual(panel.state.computation.ex, { marker: { visible: false, color: '#abcdef' } });
   field('node-marker-color').value = '#123456'; field('node-marker-color').fire('input');
   assert.deepEqual(panel.state, { ...original, computation: { ex: { marker: { visible: false, color: '#123456' } }, q: {} } });
   // Changing a normal node attribute retains its independently configured marker.
@@ -313,11 +316,12 @@ test('x marker controls appear only for ex, preserve other preferences, and rest
     assert.equal(writes.length, before);
   }
   field('node-type').value = 'computation:ex'; field('node-type').fire('change');
-  sceneColor = '#556677';
+  settings.nodes.computationTypes.ex.marker.color = '#556677';
+  original.computation.ex.marker.color = '#556677';
   field('node-reset').fire('click');
   assert.deepEqual(panel.state, original);
   assert.equal(field('node-marker-visible').checked, true);
-  assert.equal(field('node-marker-color').value, sceneColor);
+  assert.equal(field('node-marker-color').value, settings.nodes.computationTypes.ex.marker.color);
   assert.deepEqual(harness(writes.at(-1)[1]).panel.state, original);
   panel.dispose(); const before = writes.length;
   field('node-marker-visible').fire('change'); field('node-marker-color').fire('input');
@@ -335,14 +339,31 @@ test('x marker settings validate independently and never apply to q nodes or pur
   assert.deepEqual(normalizeNetworkStyles(JSON.parse(JSON.stringify(normalized)), config), normalized);
   for (const marker of [null, [], {}, { visible: 'false', color: 'red' }]) {
     saved.computation.ex.marker = marker;
-    assert.deepEqual(normalizeNetworkStyles(saved, config).computation.ex, { labels: false });
+    assert.deepEqual(normalizeNetworkStyles(saved, config).computation.ex, { labels: false, marker: markerDefaults() });
   }
   const { panel, field } = harness(JSON.stringify(saved));
   field('node-type').value = 'computation:ex'; field('node-type').fire('change');
-  assert.equal(field('node-marker-visible').checked, false);
-  field('node-marker-visible').checked = true; field('node-marker-visible').fire('change');
+  assert.equal(field('node-marker-visible').checked, config.nodes.computationTypes.ex.marker.visible);
+  field('node-marker-visible').checked = false; field('node-marker-visible').fire('change');
   assert.equal(panel.state.computation.ex.labels, false);
-  assert.deepEqual(panel.state.computation.ex.marker, { visible: true });
+  assert.deepEqual(panel.state.computation.ex.marker, { ...markerDefaults(), visible: false });
+});
+
+test('non-default x visibility and color initialize and reset directly from the configuration tree', () => {
+  const settings = copy(config);
+  settings.nodes.computationTypes.ex.marker = { visible: false, color: '#314159', size: 24 };
+  settings.nodes.types.node.labels = false;
+  const { panel, field, writes } = harness(null, { settings });
+  field('node-type').value = 'computation:ex'; field('node-type').fire('change');
+  assert.equal(field('node-marker-visible').checked, false);
+  assert.equal(field('node-marker-color').value, '#314159');
+  assert.deepEqual(panel.state.computation.ex.marker, { visible: false, color: '#314159' });
+  field('node-marker-visible').checked = true; field('node-marker-visible').fire('change');
+  field('node-marker-color').value = '#ffffff'; field('node-marker-color').fire('input');
+  assert.equal(panel.state.nodes.node.labels, false);
+  field('node-reset').fire('click');
+  assert.deepEqual(panel.state.computation.ex.marker, { visible: false, color: '#314159' });
+  assert.deepEqual(harness(writes.at(-1)[1], { settings }).panel.state, panel.state);
 });
 
 test('editing or resetting a prototype-named tag uses the same safe settings flow', () => {

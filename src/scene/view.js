@@ -44,13 +44,15 @@ function label(text, color = '#a5bcd3', size = 22) {
   return sprite;
 }
 export class NetworkView {
-  constructor(container, onSelect, onError = () => {}, onLayout = () => {}, onBackend = () => {}) {
+  constructor(container, onSelect, onError = () => {}, onLayout = () => {}, onBackend = () => {}, settings = APP_CONFIG.scene) {
     this.layoutMode=DEFAULT_LAYOUT_MODE; this.layoutGeneration=0; this.onLayout=onLayout;
     this.container = container; this.onSelect = onSelect; this.onError = onError; this.available = false;
     this.onBackend = onBackend;
     this.scene = new THREE.Scene(); this.scene.fog = new THREE.FogExp2(0x0a1422, .012);
-    this.camera = new THREE.PerspectiveCamera(42, 1, .1, 500);
-    this.camera.position.set(12,8,18);this.camera.lookAt(0,0,0);
+    this.cameraConfig = settings.camera; this.controlsConfig = settings.controls;
+    const { projection, initial } = this.cameraConfig;
+    this.camera = new THREE.PerspectiveCamera(projection.fov, 1, projection.near, projection.far);
+    this.camera.position.copy(initial.position);this.camera.lookAt(initial.target.x,initial.target.y,initial.target.z);
     this.edgeTime=0;this.renderSchedule=new RenderSchedule();
     this.group = new THREE.Group(); this.scene.add(this.group);
     this.signalGroup = new THREE.Group(); this.scene.add(this.signalGroup);
@@ -122,13 +124,13 @@ export class NetworkView {
     }
     for (const signal of this.signals) this.styleSignalLabel(signal);
   }
-  styleNodeMarker(visual, style = resolveNodeStyle(visual, this.networkStyles)) {
+  styleNodeMarker(visual) {
     if (!visual.q) return;
-    const defaults = APP_CONFIG.scene.styles.nodes.computationTypes.ex.marker;
-    const marker = this.networkStyles?.computation?.ex?.marker;
-    this.styleNodeLabel(visual.q);
-    if (marker?.color !== undefined) visual.q.textColor.set(marker.color);
-    visual.q.visible = visual.mesh.visible && (marker?.visible ?? (defaults.visible && style?.labels !== false));
+    const defaults = this.networkStyles ? APP_CONFIG.scene.styles.nodes.computationTypes.ex.marker : APP_CONFIG.scene.nodeMarker;
+    const marker = { ...defaults, ...this.networkStyles?.computation?.ex?.marker };
+    this.styleNodeLabel(visual.q, { color: defaults.color, size: defaults.size });
+    if (this.networkStyles) visual.q.textColor.set(marker.color);
+    visual.q.visible = visual.mesh.visible && marker.visible;
   }
   setNetworkStyles(state) {
     const next = state ? structuredClone(state) : null;
@@ -152,7 +154,7 @@ export class NetworkView {
     visual.mesh.scale.setScalar(style?.size ?? 1);
     visual.styleColor = style ? new THREE.Color(style.color).getHex() : visual.base;
     visual.title.visible = visual.count.visible = visual.mesh.visible && style?.labels !== false && !this.nodeLabelsHidden;
-    this.styleNodeMarker(visual, style);
+    this.styleNodeMarker(visual);
     this.placeVisualLabels(visual);
     visual.mesh.updateMatrixWorld();
   }
@@ -188,7 +190,7 @@ export class NetworkView {
     this.controls = new EditorControls(this.camera, this.renderer.domElement,ndc=>{
       this.camera.updateMatrixWorld();this.raycaster.setFromCamera(ndc,this.camera);
       return this.raycaster.intersectObjects(this.pickObjects(),false)[0]?.point??null;
-    });
+    }, this.controlsConfig);
     this.controls.addEventListener('change',()=>this.renderSchedule.interact(performance.now()));
     this.visibilityChanged??=()=>this.renderSchedule.resetClock();
     document.removeEventListener('visibilitychange',this.visibilityChanged);
@@ -248,20 +250,21 @@ export class NetworkView {
     const b=this.layout&&this.outputBoard.fitBounds(this.layout.bounds);
     if(!b)return;
     const center=new THREE.Vector3((b.min.x+b.max.x)/2,(b.min.y+b.max.y)/2,(b.min.z+b.max.z)/2);
-    const direction=new THREE.Vector3(.18,0,1).normalize();
-    const right=new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0),direction).normalize();
+    const { projection, fit } = this.cameraConfig, controls = this.controlsConfig;
+    const direction=new THREE.Vector3().copy(fit.direction).normalize();
+    const right=new THREE.Vector3().crossVectors(new THREE.Vector3().copy(fit.up),direction).normalize();
     const up=new THREE.Vector3().crossVectors(direction,right);
     const tangent=Math.tan(THREE.MathUtils.degToRad(this.camera.fov/2));
-    let distance=4;
+    let distance=fit.minDistance;
     // Fit every node and its labels, with room for the layout controls above.
-    for(const x of [b.min.x-.6,b.max.x+.6])for(const y of [b.min.y-.9,b.max.y+.6])for(const z of [b.min.z-.4,b.max.z+.4]){
+    for(const x of [b.min.x-fit.padding.min.x,b.max.x+fit.padding.max.x])for(const y of [b.min.y-fit.padding.min.y,b.max.y+fit.padding.max.y])for(const z of [b.min.z-fit.padding.min.z,b.max.z+fit.padding.max.z]){
       const v=new THREE.Vector3(x,y,z).sub(center),depth=v.dot(direction);
-      distance=Math.max(distance,depth+Math.max(Math.abs(v.dot(right))/(tangent*this.camera.aspect*.82),Math.abs(v.dot(up))/(tangent*.72)));
+      distance=Math.max(distance,depth+Math.max(Math.abs(v.dot(right))/(tangent*this.camera.aspect*fit.occupancy.horizontal),Math.abs(v.dot(up))/(tangent*fit.occupancy.vertical)));
     }
     this.camera.position.copy(center).addScaledVector(direction,distance);
-    this.camera.far=Math.max(500,distance*5);this.camera.updateProjectionMatrix();
-    this.controls?.target.copy(center);this.camera.up.set(0,1,0);this.camera.lookAt(center);
-    if(this.controls){this.controls.minDistance=.2;this.controls.maxDistance=Math.max(200,distance*4);this.controls.update();}
+    this.camera.far=Math.max(projection.far,distance*fit.farMultiplier);this.camera.updateProjectionMatrix();
+    this.controls?.target.copy(center);this.camera.up.copy(fit.up);this.camera.lookAt(center);
+    if(this.controls){this.controls.minDistance=controls.minDistance;this.controls.maxDistance=Math.max(controls.maxDistance,distance*fit.maxDistanceMultiplier);this.controls.update();}
     this.renderSchedule.invalidate();
   }
   requestLayout(mode=this.layoutMode) {
@@ -332,7 +335,7 @@ export class NetworkView {
       const title = this.labels.add(displayName); title.position.copy(pos).add(new THREE.Vector3(0,TITLE_OFFSET,0));
       const count = this.labels.add(type==='Q'?'0 次':'',{color:'#5c7a96',size:17}); count.position.copy(pos).add(new THREE.Vector3(0,COUNT_OFFSET,0));
       title.visible=count.visible=!this.nodeLabelsHidden;
-      const marker = APP_CONFIG.scene.styles.nodes.computationTypes.ex.marker;
+      const marker = APP_CONFIG.scene.nodeMarker;
       const q = hasEX ? this.labels.add(APP_CONFIG.scene.nodeMarker.text,{color:marker.color,size:marker.size,renderOrder:6}) : null;
       if(q){q.scale.set(.46,.115,1);q.position.copy(pos);}
       this.visuals.set(key,{mesh,title,count,q,id,type,hasEX,error,base:colors[type],lastCount:0,batchIndex:this.visuals.size});
